@@ -7,8 +7,48 @@ detecção automática de silêncio (fim de frase).
 
 from __future__ import annotations
 
-import asyncio
+# Otimização Windows: Garante o registro do DLL Path de CUDA antes de qualquer import do projeto
+import os
 import sys
+import ctypes
+from pathlib import Path
+_main_dll_handles = []
+if sys.platform == "win32":
+    site_packages = Path(sys.prefix) / "Lib" / "site-packages"
+    nvidia_dir = site_packages / "nvidia"
+    if nvidia_dir.exists():
+        # 1. Registra os caminhos no add_dll_directory
+        for bin_dir in nvidia_dir.glob("**/bin"):
+            try:
+                _main_dll_handles.append(os.add_dll_directory(str(bin_dir.resolve())))
+            except Exception:
+                pass
+        
+        # 2. Pré-carrega as DLLs na memória do processo via ctypes
+        try:
+            # CUDA Runtime
+            cudart_path = nvidia_dir / "cuda_runtime" / "bin" / "cudart64_12.dll"
+            if cudart_path.exists():
+                ctypes.CDLL(str(cudart_path.resolve()))
+            
+            # cuBLAS Lt
+            cublaslt_path = nvidia_dir / "cublas" / "bin" / "cublasLt64_12.dll"
+            if cublaslt_path.exists():
+                ctypes.CDLL(str(cublaslt_path.resolve()))
+                
+            # cuBLAS
+            cublas_path = nvidia_dir / "cublas" / "bin" / "cublas64_12.dll"
+            if cublas_path.exists():
+                ctypes.CDLL(str(cublas_path.resolve()))
+                
+            # cuDNN
+            cudnn_path = nvidia_dir / "cudnn" / "bin" / "cudnn64_9.dll"
+            if cudnn_path.exists():
+                ctypes.CDLL(str(cudnn_path.resolve()))
+        except Exception:
+            pass
+
+import asyncio
 import time
 
 import numpy as np

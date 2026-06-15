@@ -11,6 +11,27 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
+
+# Otimização Windows: Adiciona os DLLs dos pacotes pip da NVIDIA ao search path
+import os
+import sys
+# Lista global para manter as referências de DLL vivas na memória
+_dll_handles = []
+
+if sys.platform == "win32":
+    # Procura em site-packages/nvidia
+    site_packages = Path(sys.prefix) / "Lib" / "site-packages"
+    nvidia_dir = site_packages / "nvidia"
+    print(f"[debug] Checking site-packages/nvidia path: {nvidia_dir} (exists={nvidia_dir.exists()})")
+    if nvidia_dir.exists():
+        for bin_dir in nvidia_dir.glob("**/bin"):
+            try:
+                print(f"[debug] Registering and keeping DLL path: {bin_dir.resolve()}")
+                handle = os.add_dll_directory(str(bin_dir.resolve()))
+                _dll_handles.append(handle)
+            except Exception as e:
+                print(f"[debug] Error adding DLL path {bin_dir}: {e}")
+
 from faster_whisper import WhisperModel
 
 from jarvis.config.settings import get_settings
@@ -28,6 +49,7 @@ class Transcriber:
         self.compute_type = settings.stt.compute_type
         self.device = settings.stt.device
         self.language = settings.stt.language
+        self.initial_prompt = settings.stt.initial_prompt
 
         self._model: WhisperModel | None = None
         # Executor para rodar a inferência pesada fora do loop de eventos principal
@@ -94,13 +116,14 @@ class Transcriber:
 
         assert self._model is not None
 
-        # Otimizado para inglês e máxima velocidade (beam_size=1)
+        # Otimizado para inglês e máxima velocidade (beam_size=1) com viés de desenvolvedor
         segments, info = self._model.transcribe(
             audio,
             language="en",
             beam_size=1,
             best_of=1,
             vad_filter=False,  # VAD já é feito externamente
+            initial_prompt=self.initial_prompt,
         )
 
         # Junta os segmentos de texto

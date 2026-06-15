@@ -84,6 +84,21 @@ class STTSettings(BaseSettings):
     compute_type: str = "float16"
     device: str = "cuda"
     language: str = "pt"  # Idioma padrão para transcrição
+    
+    # Prompt inicial contendo termos técnicos com forte foco em Java, Spring Boot, SQL e Kafka
+    initial_prompt: str = (
+        "Java, JVM, JDK, Spring, Spring Boot, SpringBoot, Spring Data JPA, Hibernate, Maven, Gradle, "
+        "Kafka, Apache Kafka, Zookeeper, KRaft, topic, partition, producer, consumer, broker, offset, "
+        "Spring Kafka, @KafkaListener, @SpringBootApplication, @RestController, @Service, @Repository, "
+        "@Component, @Autowired, @Bean, @Configuration, @Value, @Transactional, @Query, @Entity, @Table, @Id, "
+        "application.properties, application.yml, JPA, JDBC, Hibernate, Liquibase, Flyway, H2 database, "
+        "SQL, DDL, DML, SELECT, JOIN, LEFT JOIN, INNER JOIN, WHERE, GROUP BY, ORDER BY, primary key, foreign key, "
+        "transaction, ACID, isolation level, stored procedure, PostgreSQL, MySQL, Oracle DB, SQL Server, "
+        "Lombok, JUnit, Mockito, MapStruct, Jackson, SLF4J, Logback, Tomcat, Netty, JAR, WAR, Garbage Collector, GC, "
+        "multithreading, concurrency, thread pool, ExecutorService, CompletableFuture, stream, lambda, "
+        "Docker, Kubernetes, AWS, GCP, git, GitHub, commit, branch, PR, pull request, merge, rebase, "
+        "async, await, API, REST API, JSON, YAML, microservices, CI/CD, DevOps, RAG, LLM, ChromaDB, pgvector."
+    )
 
 
 class AudioSettings(BaseSettings):
