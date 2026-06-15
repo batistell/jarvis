@@ -1,27 +1,32 @@
-"""Jarvis — Entry point.
+"""Jarvis — Entry point principal com transcrição em tempo real.
 
-Inicializa configurações, logging e exibe status do sistema.
-Será expandido nas fases seguintes com STT, LLM e orchestrator.
+Inicializa as configurações, logging, carrega o modelo Faster Whisper
+e inicia a captura de áudio com transcrição em milissegundos e
+detecção automática de silêncio (fim de frase).
 """
 
 from __future__ import annotations
 
 import asyncio
 import sys
+import time
 
+import numpy as np
 from rich.console import Console
 from rich.panel import Panel
-from rich.table import Table
 
 from jarvis.config.settings import get_settings
 from jarvis.core.logging import get_logger, setup_logging
+from jarvis.stt.mic_capture import MicCapture
+from jarvis.stt.transcriber import Transcriber
+from jarvis.stt.vad import VADDetector
 
 console = Console()
 log = get_logger("jarvis.main")
 
 
 def _print_banner() -> None:
-    """Exibe banner do Jarvis no terminal."""
+    """Exibe o banner do Jarvis."""
     banner = """
      ██╗ █████╗ ██████╗ ██╗   ██╗██╗███████╗
      ██║██╔══██╗██╔══██╗██║   ██║██║██╔════╝
@@ -30,113 +35,123 @@ def _print_banner() -> None:
 ╚█████╔╝██║  ██║██║  ██║ ╚████╔╝ ██║███████║
  ╚════╝ ╚═╝  ╚═╝╚═╝  ╚═╝  ╚═══╝  ╚═╝╚══════╝
     """
-    console.print(Panel(banner, title="🤖 Assistente Pessoal Local", border_style="cyan"))
+    console.print(Panel(banner, title="🤖 Jarvis STT Test", border_style="cyan"))
 
 
-def _print_status(settings) -> None:
-    """Exibe tabela de status de configuração."""
-    table = Table(title="⚙️  Configuração do Sistema", border_style="dim")
-    table.add_column("Componente", style="cyan", no_wrap=True)
-    table.add_column("Configuração", style="green")
-    table.add_column("Status", style="yellow")
+async def run_stt_loop() -> None:
+    """Loop principal de captura e transcrição em tempo real."""
+    settings = get_settings()
 
-    # Ambiente
-    table.add_row("Ambiente", settings.env.value, "✅")
-    table.add_row("Log Level", settings.log_level, "✅")
+    console.print("[yellow]⏳ Carregando componentes do STT...[/yellow]")
+    mic = MicCapture()
+    vad = VADDetector()
+    transcriber = Transcriber()
 
-    # PostgreSQL
-    db_status = "⏳ Não conectado"
-    table.add_row(
-        "PostgreSQL",
-        f"{settings.db.host}:{settings.db.port}/{settings.db.name}",
-        db_status,
-    )
+    # Força o carregamento do modelo Whisper no startup
+    transcriber.load_model()
+    console.print("[green]✅ Modelo Whisper carregado e pronto![/green]\n")
 
-    # LLM
-    model_path = settings.llm.resolved_model_path
-    llm_status = "✅ Encontrado" if model_path.exists() else "❌ Não encontrado"
-    table.add_row("LLM Model", str(model_path.name), llm_status)
+    # Parâmetros de controle
+    # Silêncio necessário para fechar uma frase (ms)
+    silence_threshold_ms = settings.audio.silence_threshold_ms
+    # Duração de cada chunk (ms)
+    chunk_duration_ms = settings.audio.chunk_duration_ms
+    # Chunks de silêncio tolerados antes de finalizar a frase
+    max_silent_chunks = silence_threshold_ms // chunk_duration_ms
 
-    # STT
-    table.add_row(
-        "STT",
-        f"{settings.stt.model_size} ({settings.stt.compute_type})",
-        "⏳ Não carregado",
-    )
+    # Buffers de estado
+    audio_buffer: list[np.ndarray] = []
+    is_speaking = False
+    silent_chunks = 0
 
-    # ChromaDB
-    chroma_path = settings.chroma.resolved_persist_dir
-    chroma_status = "✅ Existe" if chroma_path.exists() else "📁 Será criado"
-    table.add_row("ChromaDB", str(chroma_path), chroma_status)
+    # Controle de transcrição parcial (para não sobrecarregar)
+    last_partial_time = 0.0
+    partial_interval_s = 0.35  # Transcreve parcial a cada 350ms
 
-    # Embeddings
-    table.add_row(
-        "Embeddings",
-        f"{settings.embedding.model} ({settings.embedding.device})",
-        "⏳ Não carregado",
-    )
+    console.print("[bold cyan]🎙️  Microfone Ativo. Pode começar a falar![/bold cyan]")
+    console.print("[dim]Pressione Ctrl+C para encerrar.[/dim]\n")
 
-    console.print(table)
-
-
-async def _check_db_connection(settings) -> bool:
-    """Testa conexão com o PostgreSQL."""
+    mic.start()
     try:
-        from jarvis.knowledge.database import get_engine
+        async for chunk in mic.stream():
+            # 1. Verifica se há fala no chunk de 30ms
+            speech_detected = vad.is_speech(chunk)
 
-        engine = get_engine()
-        async with engine.connect() as conn:
-            result = await conn.execute(
-                __import__("sqlalchemy").text("SELECT 1")
-            )
-            result.scalar()
-        log.info("Conexão com PostgreSQL estabelecida com sucesso")
-        return True
-    except Exception as e:
-        log.warning("Falha ao conectar ao PostgreSQL: {}", str(e))
-        return False
+            if speech_detected:
+                if not is_speaking:
+                    is_speaking = True
+                    log.debug("Fala detectada - Iniciando frase")
+                # Reseta contador de silêncio e acumula áudio
+                silent_chunks = 0
+                audio_buffer.append(chunk)
+            else:
+                if is_speaking:
+                    # Acumula o silêncio também para não cortar palavras
+                    audio_buffer.append(chunk)
+                    silent_chunks += 1
+
+                    # Se atingir o threshold de silêncio, finaliza a frase
+                    if silent_chunks >= max_silent_chunks:
+                        is_speaking = False
+                        # Concatena todo o áudio acumulado
+                        full_audio = np.concatenate(audio_buffer, axis=0).flatten()
+
+                        # Se o áudio for longo o suficiente, transcreve e comete
+                        if len(full_audio) > settings.audio.sample_rate * 0.5:
+                            final_text = await transcriber.transcribe(full_audio)
+                            if final_text:
+                                # Apaga a linha parcial e imprime a final com destaque
+                                sys.stdout.write("\r\033[K")  # Limpa linha
+                                console.print(f"[bold green]🗣️  Você:[/bold green] {final_text}")
+                            else:
+                                sys.stdout.write("\r\033[K")
+                        else:
+                            sys.stdout.write("\r\033[K")
+
+                        # Reseta buffers
+                        audio_buffer.clear()
+                        silent_chunks = 0
+
+            # 2. Transcrição Parcial (Real-time Feedback)
+            if is_speaking and len(audio_buffer) > 0:
+                now = time.time()
+                if now - last_partial_time >= partial_interval_s:
+                    last_partial_time = now
+
+                    # Concatena o áudio acumulado até o momento
+                    partial_audio = np.concatenate(audio_buffer, axis=0).flatten()
+
+                    # Transcreve em segundo plano
+                    # Criamos uma task para não bloquear o loop de captura de áudio
+                    async def transcribe_partial(audio_data: np.ndarray) -> None:
+                        text = await transcriber.transcribe(audio_data)
+                        if text and is_speaking:
+                            # Imprime em cinza no terminal sobrescrevendo a linha atual
+                            sys.stdout.write(f"\r\033[K[dim]🗣️  Escrevendo: {text}...[/dim]")
+                            sys.stdout.flush()
+
+                    asyncio.create_task(transcribe_partial(partial_audio))
+
+    except KeyboardInterrupt:
+        pass
+    finally:
+        mic.stop()
+        console.print("\n[yellow]🎙️  Microfone desativado.[/yellow]")
 
 
 async def _async_main() -> None:
-    """Entry point assíncrono."""
-    settings = get_settings()
-
+    """Main principal assíncrono."""
     _print_banner()
-    _print_status(settings)
-
-    console.print()
-
-    # Testar conexão com banco
-    console.print("[dim]Testando conexão com PostgreSQL...[/dim]")
-    db_ok = await _check_db_connection(settings)
-    if db_ok:
-        console.print("[green]✅ PostgreSQL conectado com sucesso![/green]")
-    else:
-        console.print(
-            "[yellow]⚠️  PostgreSQL não disponível. "
-            "Execute 'python scripts/setup_db.py' para configurar.[/yellow]"
-        )
-
-    console.print()
-    console.print(
-        Panel(
-            "[dim]Fase 1 concluída — Fundação do projeto.\n"
-            "Próximos passos: Fase 2 (STT) e Fase 3 (LLM).[/dim]",
-            title="📋 Status",
-            border_style="dim",
-        )
-    )
+    await run_stt_loop()
 
 
 def main() -> None:
-    """Entry point síncrono (chamado pelo console_scripts)."""
+    """Entry point do script console."""
     setup_logging()
-    log.info("Jarvis inicializando...")
-
     try:
         asyncio.run(_async_main())
     except KeyboardInterrupt:
-        console.print("\n[dim]Jarvis encerrado pelo usuário.[/dim]")
+        console.print("\n[dim]Jarvis encerrado.[/dim]")
         sys.exit(0)
 
 

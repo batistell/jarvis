@@ -49,6 +49,9 @@ def setup_logging() -> None:
 
     settings = get_settings()
 
+    # Configura valor default para extra['icon'] para evitar KeyError
+    logger.configure(extra={"icon": "🤖"})
+
     # Remove handlers padrão do loguru
     logger.remove()
 

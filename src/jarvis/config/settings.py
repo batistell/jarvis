@@ -12,9 +12,14 @@ from typing import Literal
 
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from dotenv import load_dotenv
 
 # Raiz do projeto (3 níveis acima: src/jarvis/config -> src/jarvis -> src -> jarvis/)
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
+
+# Carrega as variáveis de ambiente do .env para os sub-modelos herdarem
+load_dotenv(_PROJECT_ROOT / ".env")
+
 
 
 class Environment(str, Enum):

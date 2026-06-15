@@ -22,8 +22,8 @@ dependencies = [
     # --- Speech-to-Text ---
     "faster-whisper>=1.0",
     "sounddevice>=0.4",
-    "webrtcvad>=2.0.10",
-    "numpy>=1.26,<2.0",
+    "numpy>=1.26",
+
 
     # --- LLM Local ---
     "llama-cpp-python>=0.3",
