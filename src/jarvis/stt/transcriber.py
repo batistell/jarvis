@@ -34,7 +34,7 @@ class Transcriber:
         self._executor = ThreadPoolExecutor(max_workers=1)
 
     def load_model(self) -> None:
-        """Carrega o modelo na memória (GPU ou CPU)."""
+        """Carrega o modelo na memória (GPU ou CPU) com dry-run para verificar DLLs."""
         if self._model is not None:
             return
 
@@ -47,29 +47,45 @@ class Transcriber:
 
         try:
             # Tenta carregar na GPU/CUDA conforme configurado
-            self._model = WhisperModel(
+            model = WhisperModel(
                 self.model_size,
                 device=self.device,
                 compute_type=self.compute_type,
             )
-            log.info("Modelo Faster Whisper carregado com sucesso na GPU!")
+            
+            # DRY-RUN: Faster Whisper carrega cuBLAS/cuDNN preguiçosamente.
+            # Transcrevemos 1 segundo de silêncio para forçar o carregamento das DLLs de GPU
+            # e garantir que não haverá erros em tempo de execução.
+            dummy_audio = np.zeros(16000, dtype=np.float32)
+            list(model.transcribe(dummy_audio, beam_size=1)[0])
+            
+            self._model = model
+            log.info("Modelo Faster Whisper carregado com sucesso na GPU (CUDA)!")
+            
         except Exception as e:
             log.warning(
-                "Falha ao carregar na GPU ({}) com compute={}. Tentando fallback para CPU (float32)...",
+                "Falha ao inicializar GPU/CUDA ({}) com compute={}. "
+                "Realizando fallback automático para CPU (float32)...",
                 e,
                 self.compute_type,
             )
             try:
                 # Fallback para CPU
-                self._model = WhisperModel(
+                model = WhisperModel(
                     self.model_size,
                     device="cpu",
                     compute_type="float32",
                 )
+                # Dry-run na CPU para garantir que funciona
+                dummy_audio = np.zeros(16000, dtype=np.float32)
+                list(model.transcribe(dummy_audio, beam_size=1)[0])
+                
+                self._model = model
                 log.info("Modelo Faster Whisper carregado com sucesso na CPU.")
             except Exception as e_cpu:
                 log.critical("Falha crítica ao carregar modelo Whisper na CPU: {}", e_cpu)
                 raise e_cpu
+
 
     def _run_transcription(self, audio: np.ndarray) -> str:
         """Executa a transcrição síncrona (interna)."""
@@ -78,12 +94,13 @@ class Transcriber:
 
         assert self._model is not None
 
-        # Roda a transcrição do buffer numpy directamente
+        # Otimizado para inglês e máxima velocidade (beam_size=1)
         segments, info = self._model.transcribe(
             audio,
-            language=self.language,
-            beam_size=5,
-            vad_filter=False,  # Já estamos filtrando áudio com nosso VAD local
+            language="en",
+            beam_size=1,
+            best_of=1,
+            vad_filter=False,  # VAD já é feito externamente
         )
 
         # Junta os segmentos de texto
