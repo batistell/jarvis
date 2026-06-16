@@ -119,6 +119,114 @@ def extract_sentences(buffer: str) -> tuple[list[str], str]:
     return sentences, "".join(current)
 
 
+def match_local_ha_command(text: str, entities: list[dict]) -> tuple[str, str, str, dict] | None:
+    """Realiza o casamento semântico/sintático rápido de comandos de voz locais.
+
+    Identifica intenções básicas de ligar/desligar e mapeia para a melhor entidade correspondente.
+    """
+    # Limpa o texto
+    cmd = text.lower().replace("jarvis", "").strip()
+    for p in [".", ",", "!", "?", "-"]:
+        cmd = cmd.replace(p, "")
+    cmd = cmd.strip()
+
+    # Se contiver termos de encadeamento/tempo, pula para deixar o LLM processar via tool calling
+    if " e " in cmd or " and " in cmd or "depois" in cmd or "then" in cmd:
+        return None
+
+    # Mapeamento de intenções
+    intents = {
+        "turn_on": ["liga", "ligue", "ligar", "turn on", "switch on", "ativar", "ative", "abrir", "open"],
+        "turn_off": ["desliga", "desligue", "desligar", "turn off", "switch off", "desativar", "desative", "apagar", "apague", "fechar", "close"],
+        "toggle": ["alternar", "alterne", "toggle", "inverter"]
+    }
+
+    import re
+    matched_intent = None
+    query = cmd
+
+    for intent, triggers in intents.items():
+        for trigger in triggers:
+            # Verifica se o gatilho ocorre como uma palavra inteira (limite de palavra \b)
+            pattern = rf"\b{re.escape(trigger)}\b"
+            match = re.search(pattern, cmd)
+            if match:
+                idx = match.start()
+                query = cmd[idx + len(trigger):].strip()
+                matched_intent = intent
+                break
+        if matched_intent:
+            break
+
+    if not matched_intent or not query:
+        return None
+
+    best_entity = None
+    best_score = 0.0
+    query_clean = query.lower().strip()
+
+    for e in entities:
+        name_clean = e["name"].lower().strip()
+        entity_id_clean = e["entity_id"].lower().strip()
+
+        # 1. Match exato
+        if query_clean == name_clean or query_clean == entity_id_clean:
+            best_entity = e
+            best_score = 1.0
+            break
+
+        # 2. Match por contensão de substring
+        if query_clean in name_clean or name_clean in query_clean:
+            score = len(query_clean) / len(name_clean) if len(name_clean) > len(query_clean) else len(name_clean) / len(query_clean)
+            score = 0.8 + score * 0.19
+            if score > best_score:
+                best_score = score
+                best_entity = e
+
+        # 3. Match por interseção de palavras (com suporte a sinônimos bilíngues)
+        synonyms = {
+            "escritorio": ["office"],
+            "escritório": ["office"],
+            "office": ["escritorio", "escritório"],
+            "sala": ["living", "room"],
+            "living": ["sala"],
+            "room": ["sala", "quarto"],
+            "quarto": ["bedroom", "bed"],
+            "bedroom": ["quarto"],
+            "cozinha": ["kitchen"],
+            "kitchen": ["cozinha"],
+            "banheiro": ["bathroom", "bath"],
+            "bathroom": ["banheiro"],
+            "luz": ["light", "lâmpada"],
+            "light": ["luz", "lâmpada"],
+            "lâmpada": ["light", "luz"],
+            "lampada": ["light", "luz"],
+            "interruptor": ["switch"],
+            "switch": ["interruptor", "tomada"],
+            "tomada": ["switch"],
+        }
+        q_words = set(query_clean.split())
+        expanded_q_words = set(q_words)
+        for w in q_words:
+            if w in synonyms:
+                expanded_q_words.update(synonyms[w])
+
+        n_words = set(name_clean.replace(".", " ").replace("_", " ").replace("-", " ").split())
+        if expanded_q_words and n_words:
+            overlap = expanded_q_words.intersection(n_words)
+            score = len(overlap) / len(n_words)
+            if score > best_score:
+                best_score = score
+                best_entity = e
+
+    # Se o match for confiante (score >= 0.6)
+    if best_entity and best_score >= 0.6:
+        domain = best_entity["entity_id"].split(".")[0]
+        return matched_intent, domain, best_entity["entity_id"], best_entity
+
+    return None
+
+
 async def run_stt_loop() -> None:
     """Loop principal de captura e transcrição em tempo real."""
     settings = get_settings()
@@ -180,11 +288,16 @@ async def run_stt_loop() -> None:
     async def generate_response(prompt_text: str, lang: str) -> None:
         nonlocal llm_generating
         llm_generating = True
+        log.info("PERF: Iniciando geração do LLM para o prompt: '{}'", prompt_text)
         console.print("🤖 [bold cyan]Jarvis:[/bold cyan] ", end="")
         full_response_parts = []
         sentence_buffer = ""
+        first_token_received = False
         try:
             async for token in llm.generate_stream(prompt_text, language=lang, ha_client=ha_client):
+                if not first_token_received:
+                    log.info("PERF: Primeiro token verbal recebido do LLM.")
+                    first_token_received = True
                 sys.stdout.write(token)
                 sys.stdout.flush()
                 full_response_parts.append(token)
@@ -199,11 +312,15 @@ async def run_stt_loop() -> None:
             remaining_sentence = sentence_buffer.strip()
             if remaining_sentence:
                 tts.speak_stream(remaining_sentence, lang)
+            
+            log.info("PERF: Geração do LLM concluída com sucesso.")
         except asyncio.CancelledError:
             # Geração foi cancelada por interrupção de fala
+            log.info("PERF: Geração do LLM cancelada por interrupção de voz.")
             tts.stop()
             console.print(" [bold red][Interrompido][/bold red]")
         except Exception as e:
+            log.error("PERF: Erro na geração de resposta do LLM: {}", e)
             console.print(f"\n[red]Erro ao gerar resposta do Jarvis: {e}[/red]")
         finally:
             sys.stdout.write("\n\n")
@@ -245,9 +362,11 @@ async def run_stt_loop() -> None:
 
                         # Se o áudio for longo o suficiente, transcreve e comete (mínimo de 300ms para comandos rápidos)
                         if len(full_audio) > settings.audio.sample_rate * 0.3:
+                            log.info("PERF: Fim de fala detectado (VAD finalizado). Iniciando transcrição com Whisper STT...")
                             res = await transcriber.transcribe(full_audio)
                             if res:
                                 final_text, detected_lang = res
+                                log.info("PERF: Transcrição Whisper concluída. Texto: '{}' (Idioma: {})", final_text, detected_lang)
                                 if final_text:
                                     # Define se Jarvis estava ativo (gerando, falando ou recém-interrompido)
                                     was_jarvis_active = llm_generating or tts._is_playing or not tts._queue.empty() or llm_interrupted_by_voice
@@ -302,8 +421,33 @@ async def run_stt_loop() -> None:
                                             sys.stdout.write("\r\033[K")  # Limpa linha
                                             console.print(f"[bold green]🗣️  Você ({detected_lang}):[/bold green] {final_text}")
                                             
-                                            # Dispara a geração da resposta em uma task assíncrona separada
-                                            llm_task = asyncio.create_task(generate_response(final_text, detected_lang))
+                                            # Tenta fazer o matching semântico local rápido para o Home Assistant
+                                            matched = match_local_ha_command(final_text, ha_client.entities) if ha_client and ha_client.entities else None
+                                            
+                                            if matched:
+                                                intent, domain, entity_id, entity_obj = matched
+                                                log.info("PERF: [Local Match] Casamento semântico local detectado! Entidade: {} ({}) -> Intent: {}", entity_obj['name'], entity_id, intent)
+                                                
+                                                # Dispara a requisição REST de controle imediatamente em paralelo
+                                                asyncio.create_task(
+                                                    ha_client.control_entity(
+                                                        domain=domain,
+                                                        service=intent,
+                                                        entity_id=entity_id
+                                                    )
+                                                )
+                                                
+                                                # Cria um prompt instrutivo para o LLM apenas confirmar o sucesso verbalmente
+                                                service_desc = "ligar" if intent == "turn_on" else ("desligar" if intent == "turn_off" else "alternar")
+                                                spoken_prompt = (
+                                                    f"O usuário solicitou {service_desc} o dispositivo '{entity_obj['name']}' (ID: {entity_id}). "
+                                                    "Eu já executei a ação no Home Assistant com sucesso em segundo plano. "
+                                                    "Por favor, confirme verbalmente a conclusão dessa ação com uma frase curta, educada e elegante."
+                                                )
+                                                llm_task = asyncio.create_task(generate_response(spoken_prompt, detected_lang))
+                                            else:
+                                                # Fallback padrão: Envia para o LLM resolver via tool calling
+                                                llm_task = asyncio.create_task(generate_response(final_text, detected_lang))
                                     else:
                                         if not partial_newline_printed:
                                             sys.stdout.write("\n")

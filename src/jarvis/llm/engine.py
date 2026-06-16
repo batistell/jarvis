@@ -176,12 +176,6 @@ class LLMEngine:
                         "parameters": {
                             "type": "object",
                             "properties": {
-                                "domain": {
-                                    "type": "string",
-                                    "description": "O domínio do dispositivo (ex: 'light', 'switch', 'climate')."
-                                    if language == "pt" else
-                                    "The domain of the device (e.g., 'light', 'switch', 'climate')."
-                                },
                                 "service": {
                                     "type": "string",
                                     "description": "A ação a executar (ex: 'turn_on', 'turn_off', 'toggle', 'set_temperature')."
@@ -199,9 +193,15 @@ class LLMEngine:
                                     "description": "Parâmetros extras opcionais (ex: {'temperature': 22.0})."
                                     if language == "pt" else
                                     "Optional extra parameters (e.g., {'temperature': 22.0})."
+                                },
+                                "delay": {
+                                    "type": "integer",
+                                    "description": "Tempo opcional em segundos para aguardar antes de executar o comando."
+                                    if language == "pt" else
+                                    "Optional delay in seconds to wait before executing this command."
                                 }
                             },
-                            "required": ["domain", "service", "entity_id"]
+                            "required": ["service", "entity_id"]
                         }
                     }
                 }
@@ -247,8 +247,10 @@ class LLMEngine:
             )
 
         try:
+            log.info("PERF: Chamando create_chat_completion no modelo (início do pre-fill / processamento do prompt)...")
             response_stream = await loop.run_in_executor(self._executor, _create_stream)
             iterator = iter(response_stream)
+            log.info("PERF: Stream do LLM inicializado com sucesso.")
         except Exception as e:
             log.error("Erro ao iniciar stream do LLM: {}", e)
             raise e
@@ -263,12 +265,79 @@ class LLMEngine:
 
         in_tool_call = False
         tool_call_buffer = ""
+        collected_tool_calls = []
+        first_chunk_received = False
 
         while not self._is_cancelled:
             # Executa o passo de inferência do próximo token no executor de GPU compartilhado
             chunk = await loop.run_in_executor(self._executor, _get_next_chunk, iterator)
+            if not first_chunk_received and chunk is not None:
+                log.info("PERF: Primeiro chunk recebido do stream do LLM (pre-fill concluído, iniciando geração).")
+                first_chunk_received = True
+
             if chunk is None:
-                break
+                if collected_tool_calls:
+                    log.info("LLM: Executando {} chamadas de ferramentas coletadas no stream...", len(collected_tool_calls))
+                    import json
+                    for tool_data in collected_tool_calls:
+                        func_name = tool_data.get("name")
+                        args = tool_data.get("arguments", {})
+                        
+                        if func_name == "control_home_device" and ha_client:
+                            service = args.get("service")
+                            entity_id = args.get("entity_id")
+                            domain = args.get("domain") or (entity_id.split(".")[0] if entity_id else "")
+                            data = args.get("data")
+                            delay = float(args.get("delay", 0.0))
+                            
+                            # Dispara a chamada REST ao Home Assistant em segundo plano (em paralelo, respeitando o delay)
+                            asyncio.create_task(
+                                ha_client.control_entity(
+                                    domain=domain,
+                                    service=service,
+                                    entity_id=entity_id,
+                                    data=data,
+                                    delay=delay
+                                )
+                            )
+                            
+                            # Registra no histórico de mensagens
+                            assistant_msg = {
+                                "role": "assistant",
+                                "content": f"<tool_call>\n{json.dumps(tool_data)}\n</tool_call>"
+                            }
+                            tool_result_str = json.dumps({"status": "success", "message": "Service triggered in parallel"})
+                            tool_msg = {
+                                "role": "tool",
+                                "name": "control_home_device",
+                                "content": tool_result_str
+                            }
+                            messages.append(assistant_msg)
+                            messages.append(tool_msg)
+                            
+                    collected_tool_calls.clear()
+                    
+                    # Gera resposta verbal de confirmação
+                    def _create_follow_up():
+                        assert self._model is not None
+                        return self._model.create_chat_completion(
+                            messages=messages,
+                            max_tokens=self.settings.max_tokens,
+                            temperature=self.settings.temperature,
+                            top_p=self.settings.top_p,
+                            stream=True,
+                        )
+                    
+                    log.info("PERF: Enviando resultado das ferramentas em segundo plano e iniciando chamada follow-up...")
+                    follow_up_stream = await loop.run_in_executor(self._executor, _create_follow_up)
+                    iterator = iter(follow_up_stream)
+                    first_chunk_received = False
+                    in_tool_call = False
+                    tool_call_buffer = ""
+                    continue
+                else:
+                    break
+            
             if isinstance(chunk, Exception):
                 log.error("Erro durante a inferência do token do LLM: {}", chunk)
                 raise chunk
@@ -292,76 +361,22 @@ class LLMEngine:
                     parts = token.split("</tool_call>")
                     tool_call_buffer += parts[0]
                     
-                    log.info("LLM: Detectada chamada de ferramenta no stream: {}", tool_call_buffer)
+                    log.info("LLM: Coletada chamada de ferramenta no stream: {}", tool_call_buffer)
                     try:
                         import json
                         tool_json_str = tool_call_buffer.strip()
                         tool_data = json.loads(tool_json_str)
-                        
-                        func_name = tool_data.get("name")
-                        args = tool_data.get("arguments", {})
-                        
-                        if func_name == "control_home_device" and ha_client:
-                            domain = args.get("domain")
-                            service = args.get("service")
-                            entity_id = args.get("entity_id")
-                            data = args.get("data")
-                            
-                            # Dispara a chamada REST ao Home Assistant em segundo plano (em paralelo)
-                            asyncio.create_task(
-                                ha_client.control_entity(
-                                    domain=domain,
-                                    service=service,
-                                    entity_id=entity_id,
-                                    data=data
-                                )
-                            )
-                            
-                            # Assume sucesso imediato para iniciar a resposta verbal do LLM sem atrasos
-                            assistant_msg = {
-                                "role": "assistant",
-                                "content": f"<tool_call>\n{tool_json_str}\n</tool_call>"
-                            }
-                            tool_result_str = json.dumps({"status": "success", "message": "Service triggered in parallel"})
-                            tool_msg = {
-                                "role": "tool",
-                                "name": "control_home_device",
-                                "content": tool_result_str
-                            }
-                            
-                            messages.append(assistant_msg)
-                            messages.append(tool_msg)
-                            
-                            log.info("LLM: Enviando resultado da execução para a resposta final...")
-                            
-                            def _create_follow_up():
-                                assert self._model is not None
-                                return self._model.create_chat_completion(
-                                    messages=messages,
-                                    max_tokens=self.settings.max_tokens,
-                                    temperature=self.settings.temperature,
-                                    top_p=self.settings.top_p,
-                                    stream=True,
-                                )
-                            
-                            follow_up_stream = await loop.run_in_executor(self._executor, _create_follow_up)
-                            iterator = iter(follow_up_stream)
-                            
-                            # Reseta estados
-                            in_tool_call = False
-                            tool_call_buffer = ""
-                            continue
-                        else:
-                            log.warning("LLM: Chamada de ferramenta desconhecida ou cliente HA não configurado: {}", func_name)
+                        collected_tool_calls.append(tool_data)
                     except Exception as e:
-                        log.error("LLM: Erro ao executar ferramenta no stream: {}", e)
+                        log.error("LLM: Falha ao decodificar JSON da chamada de ferramenta: {}", e)
                         if language == "pt":
-                            yield "Perdão, Senhor. Ocorreu um erro ao tentar controlar o dispositivo."
+                            yield "Perdão, Senhor. Ocorreu um erro ao processar o comando."
                         else:
-                            yield "I am sorry, Sir. An error occurred while trying to control the device."
+                            yield "I am sorry, Sir. An error occurred while processing the command."
                     
                     if len(parts) > 1 and parts[1]:
                         yield parts[1]
+                    tool_call_buffer = ""  # Reseta buffer para próxima chamada
                     continue
                 
                 if in_tool_call:
