@@ -149,12 +149,12 @@ class TTSSettings(BaseSettings):
 
     model_config = SettingsConfigDict(env_prefix="JARVIS_TTS_")
 
-    model_path: str = "models/pt_BR-faber-medium.onnx"
+    model_path: str = "models/pt_BR-cadu-medium.onnx"
     enabled: bool = True
 
     # Configurações para idioma Português (pt)
-    pt_model_name: str = "pt_BR-faber-medium.onnx"
-    pt_base_url: str = "https://huggingface.co/rhasspy/piper-voices/resolve/main/pt/pt_BR/faber/medium"
+    pt_model_name: str = "pt_BR-cadu-medium.onnx"
+    pt_base_url: str = "https://huggingface.co/rhasspy/piper-voices/resolve/main/pt/pt_BR/cadu/medium"
 
     # Configurações para idioma Inglês (en) - mudado para Alan (mordomo britânico)
     en_model_name: str = "en_GB-alan-medium.onnx"
