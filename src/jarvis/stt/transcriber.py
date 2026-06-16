@@ -36,6 +36,7 @@ from faster_whisper import WhisperModel
 
 from jarvis.config.settings import get_settings
 from jarvis.core.logging import get_logger
+from jarvis.core.executor import get_gpu_executor
 
 log = get_logger(__name__)
 
@@ -52,8 +53,8 @@ class Transcriber:
         self.initial_prompt = settings.stt.initial_prompt
 
         self._model: WhisperModel | None = None
-        # Executor para rodar a inferência pesada fora do loop de eventos principal
-        self._executor = ThreadPoolExecutor(max_workers=1)
+        # Usa o executor compartilhado de thread única para GPU
+        self._executor = get_gpu_executor()
 
     def load_model(self) -> None:
         """Carrega o modelo na memória (GPU ou CPU) com dry-run para verificar DLLs."""
@@ -82,7 +83,7 @@ class Transcriber:
             list(model.transcribe(dummy_audio, beam_size=1)[0])
             
             self._model = model
-            log.info("Modelo Faster Whisper carregado com sucesso na GPU (CUDA)!")
+            log.info("Modelo Faster Whisper carregado com sucesso ({})!", self.device.upper())
             
         except Exception as e:
             log.warning(

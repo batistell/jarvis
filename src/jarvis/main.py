@@ -14,6 +14,13 @@ import ctypes
 from pathlib import Path
 _main_dll_handles = []
 if sys.platform == "win32":
+    # Garante suporte a UTF-8 no terminal Windows para evitar UnicodeEncodeError ao exibir emojis
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
     site_packages = Path(sys.prefix) / "Lib" / "site-packages"
     nvidia_dir = site_packages / "nvidia"
     if nvidia_dir.exists():
@@ -60,6 +67,7 @@ from jarvis.core.logging import get_logger, setup_logging
 from jarvis.stt.mic_capture import MicCapture
 from jarvis.stt.transcriber import Transcriber
 from jarvis.stt.vad import VADDetector
+from jarvis.llm.engine import LLMEngine
 
 console = Console()
 log = get_logger("jarvis.main")
@@ -82,13 +90,19 @@ async def run_stt_loop() -> None:
     """Loop principal de captura e transcrição em tempo real."""
     settings = get_settings()
 
+    llm = LLMEngine()
+    console.print("[yellow]⏳ Carregando modelo LLM (Qwen 14B)...[/yellow]")
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(llm._executor, llm.load_model)
+    console.print("[green]✅ Modelo LLM carregado e pronto![/green]")
+
     console.print("[yellow]⏳ Carregando componentes do STT...[/yellow]")
     mic = MicCapture()
     vad = VADDetector()
     transcriber = Transcriber()
 
-    # Força o carregamento do modelo Whisper no startup
-    transcriber.load_model()
+    # Força o carregamento do modelo Whisper no startup (no executor de GPU)
+    await loop.run_in_executor(transcriber._executor, transcriber.load_model)
     console.print("[green]✅ Modelo Whisper carregado e pronto![/green]\n")
 
     # Parâmetros de controle
@@ -143,6 +157,18 @@ async def run_stt_loop() -> None:
                                 # Apaga a linha parcial e imprime a final com destaque
                                 sys.stdout.write("\r\033[K")  # Limpa linha
                                 console.print(f"[bold green]🗣️  Você:[/bold green] {final_text}")
+                                
+                                # Resposta do Jarvis em streaming
+                                sys.stdout.write("🤖 [bold cyan]Jarvis:[/bold cyan] ")
+                                sys.stdout.flush()
+                                try:
+                                    async for token in llm.generate_stream(final_text):
+                                        sys.stdout.write(token)
+                                        sys.stdout.flush()
+                                except Exception as e:
+                                    console.print(f"\n[red]Erro ao gerar resposta do Jarvis: {e}[/red]")
+                                sys.stdout.write("\n\n")
+                                sys.stdout.flush()
                             else:
                                 sys.stdout.write("\r\033[K")
                         else:
