@@ -27,11 +27,11 @@ class TTSEngine:
     def _download_model(self, lang: str) -> tuple[Path, Path]:
         """Baixa o modelo e configuração do Piper caso não existam localmente."""
         if lang == "pt":
-            model_name = "pt_BR-faber-medium.onnx"
-            base_url = "https://huggingface.co/rhasspy/piper-voices/resolve/main/pt/pt_BR/faber/medium"
+            model_name = self.settings.pt_model_name
+            base_url = self.settings.pt_base_url
         else:
-            model_name = "en_US-lessac-medium.onnx"
-            base_url = "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium"
+            model_name = self.settings.en_model_name
+            base_url = self.settings.en_base_url
 
         model_path = Path("models") / model_name
         config_path = model_path.with_suffix(".onnx.json")
@@ -110,8 +110,11 @@ class TTSEngine:
                 self._is_playing = True
                 voice = self.load_model(lang)
                 
+                from piper.config import SynthesisConfig
+                config = SynthesisConfig(length_scale=self.settings.length_scale)
+                
                 # Gera e reproduz os chunks de áudio (um por frase/sentença)
-                for chunk in voice.synthesize(text):
+                for chunk in voice.synthesize(text, config):
                     if not self._is_playing or self._stop_event.is_set():
                         break
                     sd.play(chunk.audio_float_array, chunk.sample_rate)

@@ -152,6 +152,17 @@ class TTSSettings(BaseSettings):
     model_path: str = "models/pt_BR-faber-medium.onnx"
     enabled: bool = True
 
+    # Configurações para idioma Português (pt)
+    pt_model_name: str = "pt_BR-faber-medium.onnx"
+    pt_base_url: str = "https://huggingface.co/rhasspy/piper-voices/resolve/main/pt/pt_BR/faber/medium"
+
+    # Configurações para idioma Inglês (en) - mudado para Alan (mordomo britânico)
+    en_model_name: str = "en_GB-alan-medium.onnx"
+    en_base_url: str = "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_GB/alan/medium"
+
+    # Velocidade da fala (menor que 1.0 acelera, ex: 0.85 ou 0.8)
+    length_scale: float = 0.85
+
 
 class UISettings(BaseSettings):
     """Configurações de interface."""
