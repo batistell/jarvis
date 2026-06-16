@@ -80,14 +80,52 @@ class LLMEngine:
         if self._model is None:
             await loop.run_in_executor(self._executor, self.load_model)
 
+        # RAG Context Retrieval
+        context = ""
+        try:
+            from jarvis.vectorstore.embeddings import EmbeddingEngine
+            from jarvis.vectorstore.store import VectorStore
+
+            # Inicializa o motor de embeddings e a conexão com o VectorStore se não criados
+            if not hasattr(self, "_embedding_engine"):
+                self._embedding_engine = EmbeddingEngine(device="cpu")
+            if not hasattr(self, "_vector_store"):
+                self._vector_store = VectorStore()
+
+            query_emb = self._embedding_engine.get_query_embedding(prompt)
+            results = await self._vector_store.query_collection(
+                collection_name="documents",
+                query_embeddings=[query_emb],
+                limit=3,
+            )
+
+            # Filtra chunks relevantes com distância inferior a 0.8
+            context_parts = [r["document"] for r in results if r.get("distance", 1.0) < 0.8]
+            if context_parts:
+                context = "\n\n".join(context_parts)
+                log.info("RAG: Recobrados {} chunks relevantes do VectorStore.", len(context_parts))
+        except Exception as e:
+            log.warning("RAG: Falha ao recuperar contexto do VectorStore: {}", e)
+
         queue: asyncio.Queue[str | Exception | None] = asyncio.Queue()
 
         def _run_completion() -> None:
             try:
                 assert self._model is not None
+
+                user_content = prompt
+                if context:
+                    user_content = (
+                        "You have access to your Master's personal files and knowledge base. "
+                        "Use the following relevant snippets to answer the Master's question. "
+                        "Since these files belong to and describe your Master, you can assume personal pronouns (like 'me', 'my', 'I', 'eu', 'meu') refer to the person described in these files.\n\n"
+                        f"Relevant Context:\n{context}\n\n"
+                        f"Question: {prompt}"
+                    )
+
                 messages = [
                     {"role": "system", "content": BUTLER_SYSTEM_PROMPT},
-                    {"role": "user", "content": prompt},
+                    {"role": "user", "content": user_content},
                 ]
                 
                 response_stream = self._model.create_chat_completion(
