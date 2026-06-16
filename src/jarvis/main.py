@@ -9,6 +9,8 @@ from __future__ import annotations
 
 # Otimização Windows: Garante o registro do DLL Path de CUDA antes de qualquer import do projeto
 import os
+os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 import sys
 import ctypes
 from pathlib import Path
@@ -68,6 +70,7 @@ from jarvis.stt.mic_capture import MicCapture
 from jarvis.stt.transcriber import Transcriber
 from jarvis.stt.vad import VADDetector
 from jarvis.llm.engine import LLMEngine
+from jarvis.tts.engine import TTSEngine
 
 console = Console()
 log = get_logger("jarvis.main")
@@ -86,6 +89,35 @@ def _print_banner() -> None:
     console.print(Panel(banner, title="🤖 Jarvis STT Test", border_style="cyan"))
 
 
+def extract_sentences(buffer: str) -> tuple[list[str], str]:
+    """Extrai sentenças completas de um buffer de texto.
+
+    Retorna uma lista de sentenças completas e o restante do buffer.
+    """
+    sentences = []
+    current = []
+    i = 0
+    n = len(buffer)
+    while i < n:
+        char = buffer[i]
+        current.append(char)
+        if char in ('.', '!', '?', '\n'):
+            is_boundary = False
+            if char == '\n':
+                is_boundary = True
+            elif i + 1 < n and buffer[i + 1] in (' ', '\n', '\t'):
+                is_boundary = True
+            
+            if is_boundary:
+                sentence = "".join(current).strip()
+                if sentence:
+                    sentences.append(sentence)
+                current = []
+        i += 1
+        
+    return sentences, "".join(current)
+
+
 async def run_stt_loop() -> None:
     """Loop principal de captura e transcrição em tempo real."""
     settings = get_settings()
@@ -96,6 +128,10 @@ async def run_stt_loop() -> None:
     await loop.run_in_executor(llm._executor, llm.load_model)
     console.print("[green]✅ Modelo LLM carregado e pronto![/green]")
 
+    console.print("[yellow]⏳ Carregando banco de dados e motor de busca (RAG)...[/yellow]")
+    await loop.run_in_executor(None, llm.pre_load_rag)
+    console.print("[green]✅ Motor de busca (RAG) carregado e pronto![/green]")
+
     console.print("[yellow]⏳ Carregando componentes do STT...[/yellow]")
     mic = MicCapture()
     vad = VADDetector()
@@ -103,7 +139,12 @@ async def run_stt_loop() -> None:
 
     # Força o carregamento do modelo Whisper no startup (no executor de GPU)
     await loop.run_in_executor(transcriber._executor, transcriber.load_model)
-    console.print("[green]✅ Modelo Whisper carregado e pronto![/green]\n")
+    console.print("[green]✅ Modelo Whisper carregado e pronto![/green]")
+
+    tts = TTSEngine()
+    console.print("[yellow]⏳ Carregando sintetizador de voz (TTS)...[/yellow]")
+    await loop.run_in_executor(None, tts.load_model)
+    console.print("[green]✅ Sintetizador de voz (TTS) carregado e pronto![/green]\n")
 
     # Parâmetros de controle
     # Silêncio necessário para fechar uma frase (ms)
@@ -118,6 +159,43 @@ async def run_stt_loop() -> None:
     is_speaking = False
     silent_chunks = 0
 
+    # Controle de tarefas assíncronas para o LLM
+    llm_task: asyncio.Task | None = None
+    llm_generating = False
+
+    async def generate_response(prompt_text: str, lang: str) -> None:
+        nonlocal llm_generating
+        llm_generating = True
+        console.print("🤖 [bold cyan]Jarvis:[/bold cyan] ", end="")
+        full_response_parts = []
+        sentence_buffer = ""
+        try:
+            async for token in llm.generate_stream(prompt_text, language=lang):
+                sys.stdout.write(token)
+                sys.stdout.flush()
+                full_response_parts.append(token)
+
+                sentence_buffer += token
+                sentences, sentence_buffer = extract_sentences(sentence_buffer)
+                for sentence in sentences:
+                    # Envia a frase para a fila do TTS em segundo plano
+                    tts.speak_stream(sentence, lang)
+
+            # Envia a última parte restante do buffer ao finalizar a geração
+            remaining_sentence = sentence_buffer.strip()
+            if remaining_sentence:
+                tts.speak_stream(remaining_sentence, lang)
+        except asyncio.CancelledError:
+            # Geração foi cancelada por interrupção de fala
+            tts.stop()
+            console.print(" [bold red][Interrompido][/bold red]")
+        except Exception as e:
+            console.print(f"\n[red]Erro ao gerar resposta do Jarvis: {e}[/red]")
+        finally:
+            sys.stdout.write("\n\n")
+            sys.stdout.flush()
+            llm_generating = False
+
     # Controle de transcrição parcial (para não sobrecarregar)
     last_partial_time = 0.0
     partial_interval_s = 0.35  # Transcreve parcial a cada 350ms
@@ -130,6 +208,21 @@ async def run_stt_loop() -> None:
         async for chunk in mic.stream():
             # 1. Verifica se há fala no chunk de 30ms
             speech_detected = vad.is_speech(chunk)
+
+            # Se o LLM está gerando e detectamos nova fala do usuário, interrompemos!
+            if speech_detected and llm_generating:
+                if llm_task and not llm_task.done():
+                    llm.interrupt()  # Sinaliza interrupção do loop C++ do llama.cpp
+                    tts.stop()  # Para o áudio imediatamente e limpa a fila
+                    llm_task.cancel()  # Cancela a task assíncrona da resposta
+                    log.info("Conversa: Jarvis foi interrompido pela fala do usuário.")
+
+                # Reseta buffers e estados para começar a capturar a fala do usuário imediatamente
+                audio_buffer.clear()
+                is_speaking = True
+                silent_chunks = 0
+                audio_buffer.append(chunk)
+                continue
 
             if speech_detected:
                 if not is_speaking:
@@ -152,23 +245,18 @@ async def run_stt_loop() -> None:
 
                         # Se o áudio for longo o suficiente, transcreve e comete
                         if len(full_audio) > settings.audio.sample_rate * 0.5:
-                            final_text = await transcriber.transcribe(full_audio)
-                            if final_text:
-                                # Apaga a linha parcial e imprime a final com destaque
-                                sys.stdout.write("\r\033[K")  # Limpa linha
-                                console.print(f"[bold green]🗣️  Você:[/bold green] {final_text}")
-                                
-                                # Resposta do Jarvis em streaming
-                                sys.stdout.write("🤖 [bold cyan]Jarvis:[/bold cyan] ")
-                                sys.stdout.flush()
-                                try:
-                                    async for token in llm.generate_stream(final_text):
-                                        sys.stdout.write(token)
-                                        sys.stdout.flush()
-                                except Exception as e:
-                                    console.print(f"\n[red]Erro ao gerar resposta do Jarvis: {e}[/red]")
-                                sys.stdout.write("\n\n")
-                                sys.stdout.flush()
+                            res = await transcriber.transcribe(full_audio)
+                            if res:
+                                final_text, detected_lang = res
+                                if final_text:
+                                    # Apaga a linha parcial e imprime a final com destaque
+                                    sys.stdout.write("\r\033[K")  # Limpa linha
+                                    console.print(f"[bold green]🗣️  Você ({detected_lang}):[/bold green] {final_text}")
+                                    
+                                    # Dispara a geração da resposta em uma task assíncrona separada
+                                    llm_task = asyncio.create_task(generate_response(final_text, detected_lang))
+                                else:
+                                    sys.stdout.write("\r\033[K")
                             else:
                                 sys.stdout.write("\r\033[K")
                         else:
@@ -190,11 +278,13 @@ async def run_stt_loop() -> None:
                     # Transcreve em segundo plano
                     # Criamos uma task para não bloquear o loop de captura de áudio
                     async def transcribe_partial(audio_data: np.ndarray) -> None:
-                        text = await transcriber.transcribe(audio_data)
-                        if text and is_speaking:
-                            # Imprime em cinza no terminal sobrescrevendo a linha atual
-                            sys.stdout.write(f"\r\033[K[dim]🗣️  Escrevendo: {text}...[/dim]")
-                            sys.stdout.flush()
+                        res = await transcriber.transcribe(audio_data)
+                        if res:
+                            text, _ = res
+                            if text and is_speaking:
+                                # Imprime em cinza no terminal sobrescrevendo a linha atual
+                                sys.stdout.write(f"\r\033[K[dim]🗣️  Escrevendo: {text}...[/dim]")
+                                sys.stdout.flush()
 
                     asyncio.create_task(transcribe_partial(partial_audio))
 

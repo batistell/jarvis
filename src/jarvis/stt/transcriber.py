@@ -110,17 +110,61 @@ class Transcriber:
                 raise e_cpu
 
 
-    def _run_transcription(self, audio: np.ndarray) -> str:
+    def _filter_hallucinations(self, text: str) -> str:
+        """Filtra alucinações ou preenchimentos comuns do Whisper causados por ruído ou silêncio."""
+        cleaned = text.strip().lower()
+        # Remove pontuação comum para normalizar a comparação
+        for p in [".", ",", "!", "?", "-", '"', "'"]:
+            cleaned = cleaned.replace(p, "")
+        cleaned = cleaned.strip()
+
+        # Alucinações típicas do Whisper sob ruído ou silêncio (inglês e português)
+        hallucinations = {
+            "thank you",
+            "thank you very much",
+            "thank you for watching",
+            "thanks for watching",
+            "subtitles by amaraorg",
+            "subtitles",
+            "amaraorg",
+            "you",
+            "ha",
+            "yeah",
+            "bye",
+            "please",
+            "ok",
+            "right",
+            "obrigado",
+            "obrigada",
+            "obrigado por assistir",
+            "muito obrigado",
+            "tchau",
+        }
+
+        if cleaned in hallucinations:
+            log.warning("STT: Transcrição de ruído/silêncio ignorada (alucinação filtrada): '{}'", text)
+            return ""
+
+        # Ignora ruídos que resultam em strings extremamente curtas
+        if len(cleaned) < 2:
+            return ""
+
+        return text
+
+    def _run_transcription(self, audio: np.ndarray) -> tuple[str, str]:
         """Executa a transcrição síncrona (interna)."""
         if self._model is None:
             self.load_model()
 
         assert self._model is not None
 
-        # Otimizado para inglês e máxima velocidade (beam_size=1) com viés de desenvolvedor
+        # Se language for auto, passa None para o Faster Whisper realizar auto-detecção
+        lang = self.language if self.language and self.language != "auto" else None
+
+        # Otimizado para o idioma configurado e máxima velocidade (beam_size=1)
         segments, info = self._model.transcribe(
             audio,
-            language="en",
+            language=lang,
             beam_size=1,
             best_of=1,
             vad_filter=False,  # VAD já é feito externamente
@@ -132,16 +176,18 @@ class Transcriber:
         for segment in segments:
             text_segments.append(segment.text)
 
-        return "".join(text_segments).strip()
+        raw_text = "".join(text_segments).strip()
+        cleaned_text = self._filter_hallucinations(raw_text)
+        return cleaned_text, info.language
 
-    async def transcribe(self, audio: np.ndarray) -> str:
+    async def transcribe(self, audio: np.ndarray) -> tuple[str, str]:
         """Transcreve um buffer de áudio numpy de forma assíncrona.
 
         Args:
             audio: Array 1D do numpy contendo áudio em 16kHz float32.
 
         Returns:
-            Texto transcrito.
+            Tupla contendo (texto transcrito, código do idioma detectado).
         """
         loop = asyncio.get_running_loop()
         # Executa no thread pool para não bloquear o loop do asyncio

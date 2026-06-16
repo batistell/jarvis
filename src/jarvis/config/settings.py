@@ -83,7 +83,8 @@ class STTSettings(BaseSettings):
     model_size: str = "large-v3"
     compute_type: str = "float16"
     device: str = "cuda"
-    language: str = "pt"  # Idioma padrão para transcrição
+    language: str = "auto"  # Idioma padrão para transcrição ("auto" para detecção dinâmica)
+
     
     # Prompt inicial contendo termos técnicos com forte foco em Java, Spring Boot, SQL e Kafka
     initial_prompt: str = (
@@ -143,6 +144,15 @@ class ChromaSettings(BaseSettings):
         return _PROJECT_ROOT / p
 
 
+class TTSSettings(BaseSettings):
+    """Configurações do Text-to-Speech (Piper)."""
+
+    model_config = SettingsConfigDict(env_prefix="JARVIS_TTS_")
+
+    model_path: str = "models/pt_BR-faber-medium.onnx"
+    enabled: bool = True
+
+
 class UISettings(BaseSettings):
     """Configurações de interface."""
 
@@ -186,6 +196,7 @@ class Settings(BaseSettings):
     chroma: ChromaSettings = Field(default_factory=ChromaSettings)
     ui: UISettings = Field(default_factory=UISettings)
     web: WebSettings = Field(default_factory=WebSettings)
+    tts: TTSSettings = Field(default_factory=TTSSettings)
 
     @property
     def project_root(self) -> Path:

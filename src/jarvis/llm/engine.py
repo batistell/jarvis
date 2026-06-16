@@ -13,7 +13,7 @@ from typing import AsyncIterator
 from jarvis.config.settings import get_settings
 from jarvis.core.logging import get_logger
 from jarvis.core.executor import get_gpu_executor
-from jarvis.llm.prompts import BUTLER_SYSTEM_PROMPT
+from jarvis.llm.prompts import BUTLER_SYSTEM_PROMPT_PT, BUTLER_SYSTEM_PROMPT_EN
 
 log = get_logger(__name__)
 
@@ -26,6 +26,7 @@ class LLMEngine:
         self._model = None
         # Usa o executor compartilhado de thread única para GPU
         self._executor = get_gpu_executor()
+        self._is_cancelled = False
 
     def load_model(self) -> None:
         """Carrega o modelo na memória de forma síncrona.
@@ -65,15 +66,37 @@ class LLMEngine:
             log.critical("Falha crítica ao carregar modelo LLM: {}", e)
             raise e
 
-    async def generate_stream(self, prompt: str) -> AsyncIterator[str]:
+    def pre_load_rag(self) -> None:
+        """Pré-carrega o motor de embeddings e a conexão com o banco de dados.
+
+        Deve ser executado no startup para otimizar o tempo de resposta da primeira pergunta.
+        """
+        from jarvis.vectorstore.embeddings import EmbeddingEngine
+        from jarvis.vectorstore.store import VectorStore
+
+        log.info("Pré-carregando o motor de busca vetorial (RAG)...")
+        if not hasattr(self, "_embedding_engine"):
+            self._embedding_engine = EmbeddingEngine(device="cpu")
+        if not hasattr(self, "_vector_store"):
+            self._vector_store = VectorStore()
+        log.info("RAG pré-carregado com sucesso.")
+
+    def interrupt(self) -> None:
+        """Interrompe qualquer geração ativa do LLM."""
+        self._is_cancelled = True
+        log.info("LLM: Geração interrompida pelo usuário.")
+
+    async def generate_stream(self, prompt: str, language: str = "pt") -> AsyncIterator[str]:
         """Gera resposta do LLM em streaming assíncrono.
 
         Args:
             prompt: Pergunta ou instrução do usuário.
+            language: Idioma da resposta ("pt" ou "en").
 
         Yields:
             Fragmentos de texto (tokens) conforme gerados pelo modelo.
         """
+        self._is_cancelled = False
         loop = asyncio.get_running_loop()
 
         # Garante o carregamento do modelo em segundo plano
@@ -113,18 +136,31 @@ class LLMEngine:
             try:
                 assert self._model is not None
 
-                user_content = prompt
-                if context:
-                    user_content = (
-                        "You have access to your Master's personal files and knowledge base. "
-                        "Use the following relevant snippets to answer the Master's question. "
-                        "Since these files belong to and describe your Master, you can assume personal pronouns (like 'me', 'my', 'I', 'eu', 'meu') refer to the person described in these files.\n\n"
-                        f"Relevant Context:\n{context}\n\n"
-                        f"Question: {prompt}"
-                    )
+                if language == "en":
+                    system_prompt = BUTLER_SYSTEM_PROMPT_EN
+                    user_content = prompt
+                    if context:
+                        user_content = (
+                            "You have access to your Master's personal files and knowledge base. "
+                            "Use the following relevant snippets to answer the Master's question. "
+                            "Since these files belong to and describe your Master, you can assume that personal pronouns (like 'I', 'my', 'me') refer to the person described in these files.\n\n"
+                            f"Relevant Context:\n{context}\n\n"
+                            f"Question: {prompt}"
+                        )
+                else:
+                    system_prompt = BUTLER_SYSTEM_PROMPT_PT
+                    user_content = prompt
+                    if context:
+                        user_content = (
+                            "Você tem acesso aos arquivos pessoais e base de conhecimento do seu Mestre. "
+                            "Use os seguintes trechos relevantes para responder à pergunta do Mestre. "
+                            "Como estes arquivos pertencem e descrevem o seu Mestre, você pode assumir que pronomes pessoais (como 'eu', 'meu', 'me') se referem à pessoa descrita nestes arquivos.\n\n"
+                            f"Contexto Relevante:\n{context}\n\n"
+                            f"Pergunta: {prompt}"
+                        )
 
                 messages = [
-                    {"role": "system", "content": BUTLER_SYSTEM_PROMPT},
+                    {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_content},
                 ]
                 
@@ -137,6 +173,9 @@ class LLMEngine:
                 )
                 
                 for chunk in response_stream:
+                    if self._is_cancelled:
+                        log.debug("LLM: Geração interrompida pelo sinal de cancelamento.")
+                        break
                     delta = chunk["choices"][0]["delta"]
                     if "content" in delta:
                         # Envia token para a fila na thread principal

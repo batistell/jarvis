@@ -91,7 +91,9 @@ class VADDetector:
                 # Converte float32 [-1.0, 1.0] para int16 [-32768, 32767]
                 int16_chunk = (chunk * 32767).astype(np.int16).tobytes()
                 # webrtcvad suporta apenas frames de 10, 20 ou 30ms
-                return self._vad.is_speech(int16_chunk, self.sample_rate)
+                is_speech_webrtc = self._vad.is_speech(int16_chunk, self.sample_rate)
+                # Dual-Gate: padrão de voz webrtc AND amplitude de energia acima do ruído calibrado
+                return is_speech_webrtc and rms > self.rms_threshold
             except Exception as e:
                 # Em caso de erro (ex: tamanho de frame inválido), faz fallback para RMS
                 log.debug("Erro no webrtcvad: {}. Usando fallback RMS.", e)

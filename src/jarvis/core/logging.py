@@ -47,7 +47,15 @@ def setup_logging() -> None:
     if _configured:
         return
 
+    import logging
+
     settings = get_settings()
+
+    # Silencia bibliotecas de terceiros verbosas
+    logging.getLogger("transformers").setLevel(logging.ERROR)
+    logging.getLogger("huggingface_hub").setLevel(logging.ERROR)
+    logging.getLogger("urllib3").setLevel(logging.ERROR)
+    logging.getLogger("chromadb").setLevel(logging.ERROR)
 
     # Configura valor default para extra['icon'] para evitar KeyError
     logger.configure(extra={"icon": "🤖"})
@@ -55,11 +63,12 @@ def setup_logging() -> None:
     # Remove handlers padrão do loguru
     logger.remove()
 
-    # Handler: stderr (terminal)
+    # Handler: stderr (terminal) - limita a ERROR se estiver em modo terminal para chat limpo
+    console_level = "ERROR" if settings.ui.mode == "terminal" else settings.log_level.upper()
     logger.add(
         sys.stderr,
         format=_LOG_FORMAT,
-        level=settings.log_level.upper(),
+        level=console_level,
         colorize=True,
         backtrace=True,
         diagnose=settings.env.value == "development",
