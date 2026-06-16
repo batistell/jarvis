@@ -71,6 +71,7 @@ from jarvis.stt.transcriber import Transcriber
 from jarvis.stt.vad import VADDetector
 from jarvis.llm.engine import LLMEngine
 from jarvis.tts.engine import TTSEngine
+from jarvis.core.homeassistant import HomeAssistantClient
 
 console = Console()
 log = get_logger("jarvis.main")
@@ -146,6 +147,16 @@ async def run_stt_loop() -> None:
     await loop.run_in_executor(None, tts.load_model)
     console.print("[green]✅ Sintetizador de voz (TTS) carregado e pronto![/green]\n")
 
+    # Inicializa o cliente do Home Assistant
+    ha_client = HomeAssistantClient()
+    if ha_client.is_configured:
+        console.print("[yellow]⏳ Conectando e sincronizando dispositivos do Home Assistant...[/yellow]")
+        await ha_client.get_entities()
+        if ha_client.entities:
+            console.print(f"[green]✅ Sincronizados {len(ha_client.entities)} dispositivos do Home Assistant![/green]\n")
+        else:
+            console.print("[yellow]⚠️ Nenhum dispositivo encontrado ou falha na conexão com o Home Assistant.[/yellow]\n")
+
     # Parâmetros de controle
     # Silêncio necessário para fechar uma frase (ms)
     silence_threshold_ms = settings.audio.silence_threshold_ms
@@ -173,7 +184,7 @@ async def run_stt_loop() -> None:
         full_response_parts = []
         sentence_buffer = ""
         try:
-            async for token in llm.generate_stream(prompt_text, language=lang):
+            async for token in llm.generate_stream(prompt_text, language=lang, ha_client=ha_client):
                 sys.stdout.write(token)
                 sys.stdout.flush()
                 full_response_parts.append(token)

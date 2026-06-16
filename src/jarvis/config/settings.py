@@ -181,6 +181,15 @@ class WebSettings(BaseSettings):
     port: int = 8000
 
 
+class HomeAssistantSettings(BaseSettings):
+    """Configurações da integração com o Home Assistant OS."""
+
+    model_config = SettingsConfigDict(env_prefix="JARVIS_HA_")
+
+    url: str = "http://homeassistant.local:8123/api"
+    token: str = ""
+
+
 class Settings(BaseSettings):
     """Configurações raízes do Jarvis.
 
@@ -208,6 +217,7 @@ class Settings(BaseSettings):
     ui: UISettings = Field(default_factory=UISettings)
     web: WebSettings = Field(default_factory=WebSettings)
     tts: TTSSettings = Field(default_factory=TTSSettings)
+    ha: HomeAssistantSettings = Field(default_factory=HomeAssistantSettings)
 
     @property
     def project_root(self) -> Path:
