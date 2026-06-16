@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 from loguru import logger
-from pypdf import PdfReader
 from jarvis.config.settings import get_settings
 from jarvis.vectorstore.embeddings import EmbeddingEngine
 from jarvis.vectorstore.store import VectorStore
@@ -30,6 +29,11 @@ class DocumentIngester:
     def _extract_text_from_pdf(self, file_path: Path) -> str:
         """Extrai todo o conteúdo de texto de um arquivo PDF."""
         logger.debug(f"Extraindo texto do PDF: {file_path}")
+        try:
+            from pypdf import PdfReader
+        except ImportError:
+            logger.error("O pacote 'pypdf' é necessário para ler arquivos PDF. Instale-o com 'pip install pypdf'.")
+            raise ImportError("Pacote 'pypdf' não encontrado. Por favor, instale-o para processar PDFs.")
         reader = PdfReader(str(file_path))
         text_parts = []
         for i, page in enumerate(reader.pages):

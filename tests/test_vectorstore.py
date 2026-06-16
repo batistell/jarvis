@@ -3,6 +3,7 @@
 import shutil
 from pathlib import Path
 from unittest.mock import MagicMock, patch
+import numpy as np
 import pytest
 
 from jarvis.config.settings import Settings, ChromaSettings, EmbeddingSettings
@@ -47,7 +48,7 @@ def test_embedding_engine(
     # Mock SentenceTransformer encode
     mock_st_instance = MagicMock()
     mock_st_class.return_value = mock_st_instance
-    mock_st_instance.encode.return_value = [[0.1, 0.2, 0.3]]
+    mock_st_instance.encode.return_value = np.array([[0.1, 0.2, 0.3]])
 
     engine = EmbeddingEngine(device="cpu")
 
@@ -145,7 +146,7 @@ async def test_document_ingester(
     # Mock embeddings and client
     mock_st_instance = MagicMock()
     mock_st_class.return_value = mock_st_instance
-    mock_st_instance.encode.return_value = [[0.1, 0.2]]
+    mock_st_instance.encode.return_value = np.array([[0.1, 0.2]])
 
     mock_client = MagicMock()
     mock_client_class.return_value = mock_client
@@ -164,7 +165,9 @@ async def test_document_ingester(
     mock_collection.add.assert_called_once()
     added_kwargs = mock_collection.add.call_args[1]
     assert len(added_kwargs["documents"]) == chunks_count
-    # Relative path check (will resolve based on project_root)
-    expected_rel = str(test_file.relative_to(mock_settings.project_root).as_posix())
+    try:
+        expected_rel = str(test_file.relative_to(mock_settings.project_root).as_posix())
+    except ValueError:
+        expected_rel = str(test_file.as_posix())
     assert added_kwargs["metadatas"][0]["source"] == expected_rel
     assert added_kwargs["metadatas"][0]["type"] == "txt"
