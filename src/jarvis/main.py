@@ -162,6 +162,9 @@ async def run_stt_loop() -> None:
     # Controle de tarefas assíncronas para o LLM
     llm_task: asyncio.Task | None = None
     llm_generating = False
+    partial_newline_printed = False
+    llm_interrupted_by_voice = False
+    partial_in_progress = False
 
     async def generate_response(prompt_text: str, lang: str) -> None:
         nonlocal llm_generating
@@ -209,24 +212,10 @@ async def run_stt_loop() -> None:
             # 1. Verifica se há fala no chunk de 30ms
             speech_detected = vad.is_speech(chunk)
 
-            # Se o LLM está gerando e detectamos nova fala do usuário, interrompemos!
-            if speech_detected and llm_generating:
-                if llm_task and not llm_task.done():
-                    llm.interrupt()  # Sinaliza interrupção do loop C++ do llama.cpp
-                    tts.stop()  # Para o áudio imediatamente e limpa a fila
-                    llm_task.cancel()  # Cancela a task assíncrona da resposta
-                    log.info("Conversa: Jarvis foi interrompido pela fala do usuário.")
-
-                # Reseta buffers e estados para começar a capturar a fala do usuário imediatamente
-                audio_buffer.clear()
-                is_speaking = True
-                silent_chunks = 0
-                audio_buffer.append(chunk)
-                continue
-
             if speech_detected:
                 if not is_speaking:
                     is_speaking = True
+                    partial_newline_printed = False
                     log.debug("Fala detectada - Iniciando frase")
                 # Reseta contador de silêncio e acumula áudio
                 silent_chunks = 0
@@ -243,31 +232,93 @@ async def run_stt_loop() -> None:
                         # Concatena todo o áudio acumulado
                         full_audio = np.concatenate(audio_buffer, axis=0).flatten()
 
-                        # Se o áudio for longo o suficiente, transcreve e comete
-                        if len(full_audio) > settings.audio.sample_rate * 0.5:
+                        # Se o áudio for longo o suficiente, transcreve e comete (mínimo de 300ms para comandos rápidos)
+                        if len(full_audio) > settings.audio.sample_rate * 0.3:
                             res = await transcriber.transcribe(full_audio)
                             if res:
                                 final_text, detected_lang = res
                                 if final_text:
-                                    # Apaga a linha parcial e imprime a final com destaque
-                                    sys.stdout.write("\r\033[K")  # Limpa linha
-                                    console.print(f"[bold green]🗣️  Você ({detected_lang}):[/bold green] {final_text}")
-                                    
-                                    # Dispara a geração da resposta em uma task assíncrona separada
-                                    llm_task = asyncio.create_task(generate_response(final_text, detected_lang))
+                                    # Define se Jarvis estava ativo (gerando, falando ou recém-interrompido)
+                                    was_jarvis_active = llm_generating or tts._is_playing or not tts._queue.empty() or llm_interrupted_by_voice
+
+                                    # Definição das palavras de parada e ativação suportadas
+                                    stop_words = ("jarvis", "para", "pare", "parar", "cala a boca", "silêncio", "quieto", "stop", "shut up", "be quiet", "silence", "pera", "espera", "calma", "chega", "shh", "shush")
+
+                                    # Se Jarvis estava ativo, interrompe apenas com palavras de parada suportadas.
+                                    # Se Jarvis estava ocioso, exige a palavra de ativação "jarvis".
+                                    if was_jarvis_active:
+                                        should_process = any(word in final_text.lower() for word in stop_words)
+                                    else:
+                                        should_process = "jarvis" in final_text.lower()
+
+                                    if should_process:
+                                        # Limpa o comando para analisar
+                                        cleaned_cmd = final_text.lower().replace("jarvis", "").strip()
+                                        for p in [".", ",", "!", "?", "-"]:
+                                            cleaned_cmd = cleaned_cmd.replace(p, "")
+                                        cleaned_cmd = cleaned_cmd.strip()
+
+                                        is_stop_term = any(term in cleaned_cmd for term in ("pare", "parar", "cala a boca", "silêncio", "quieto", "stop", "shut up", "be quiet", "silence", "pera", "espera", "calma", "chega", "shh", "shush"))
+                                        is_just_name = cleaned_cmd == "" or final_text.lower().strip() in ("jarvis", "jarvis.", "jarvis!", "jarvis?")
+                                        is_stop_command = is_stop_term or (is_just_name and was_jarvis_active)
+
+                                        if is_stop_command:
+                                            # Interrompe tudo e fica em silêncio
+                                            if llm_task and not llm_task.done():
+                                                llm.interrupt()
+                                                llm_task.cancel()
+                                            tts.stop()
+                                            log.info("Conversa: Jarvis foi silenciado por comando de voz.")
+
+                                            if not partial_newline_printed:
+                                                sys.stdout.write("\n")
+                                                sys.stdout.flush()
+                                            sys.stdout.write("\r\033[K")
+                                            console.print(f"[bold green]🗣️  Você ({detected_lang}):[/bold green] {final_text} [bold red][Interrompido][/bold red]")
+                                        else:
+                                            # Se o LLM está gerando ou o TTS está reproduzindo, interrompe a geração anterior antes de responder
+                                            if llm_generating or tts._is_playing or (llm_task and not llm_task.done()):
+                                                if llm_task and not llm_task.done():
+                                                    llm.interrupt()
+                                                    llm_task.cancel()
+                                                tts.stop()
+                                                log.info("Conversa: Jarvis foi interrompido pela fala do usuário (nova pergunta).")
+
+                                            # Apaga a linha parcial e imprime a final com destaque
+                                            if not partial_newline_printed:
+                                                sys.stdout.write("\n")
+                                                sys.stdout.flush()
+                                            sys.stdout.write("\r\033[K")  # Limpa linha
+                                            console.print(f"[bold green]🗣️  Você ({detected_lang}):[/bold green] {final_text}")
+                                            
+                                            # Dispara a geração da resposta em uma task assíncrona separada
+                                            llm_task = asyncio.create_task(generate_response(final_text, detected_lang))
+                                    else:
+                                        if not partial_newline_printed:
+                                            sys.stdout.write("\n")
+                                            sys.stdout.flush()
+                                        sys.stdout.write("\r\033[K")  # Limpa linha
+                                        log.info("Conversa: Frase ignorada (não contém palavra de parada/ativação necessária).")
                                 else:
-                                    sys.stdout.write("\r\033[K")
+                                    if partial_newline_printed:
+                                        sys.stdout.write("\r\033[K")
+                                        sys.stdout.flush()
                             else:
-                                sys.stdout.write("\r\033[K")
+                                if partial_newline_printed:
+                                    sys.stdout.write("\r\033[K")
+                                    sys.stdout.flush()
                         else:
-                            sys.stdout.write("\r\033[K")
+                            if partial_newline_printed:
+                                sys.stdout.write("\r\033[K")
+                                sys.stdout.flush()
 
                         # Reseta buffers
                         audio_buffer.clear()
                         silent_chunks = 0
+                        llm_interrupted_by_voice = False
 
             # 2. Transcrição Parcial (Real-time Feedback)
-            if is_speaking and len(audio_buffer) > 0:
+            if is_speaking and len(audio_buffer) > 0 and not partial_in_progress:
                 now = time.time()
                 if now - last_partial_time >= partial_interval_s:
                     last_partial_time = now
@@ -278,13 +329,43 @@ async def run_stt_loop() -> None:
                     # Transcreve em segundo plano
                     # Criamos uma task para não bloquear o loop de captura de áudio
                     async def transcribe_partial(audio_data: np.ndarray) -> None:
-                        res = await transcriber.transcribe(audio_data)
-                        if res:
-                            text, _ = res
-                            if text and is_speaking:
-                                # Imprime em cinza no terminal sobrescrevendo a linha atual
-                                sys.stdout.write(f"\r\033[K[dim]🗣️  Escrevendo: {text}...[/dim]")
-                                sys.stdout.flush()
+                        nonlocal partial_newline_printed, partial_in_progress
+                        partial_in_progress = True
+                        try:
+                            res = await transcriber.transcribe(audio_data, is_partial=True)
+                            if res:
+                                text, _ = res
+                                if text:
+                                    # Se o usuário disser uma palavra de parada específica durante a geração ou reprodução, interrompe IMEDIATAMENTE!
+                                    # Verificado mesmo se o VAD já mudou is_speaking para False
+                                    if llm_generating or tts._is_playing or not tts._queue.empty():
+                                        cleaned_text = text.lower().strip()
+                                        for p in [".", ",", "!", "?", "-"]:
+                                            cleaned_text = cleaned_text.replace(p, "")
+                                        cleaned_text = cleaned_text.strip()
+
+                                        stop_words = ("jarvis", "para", "pare", "parar", "cala a boca", "silêncio", "quieto", "stop", "shut up", "be quiet", "silence", "pera", "espera", "calma", "chega", "shh", "shush")
+                                        if any(word in cleaned_text for word in stop_words):
+                                            if llm_task and not llm_task.done():
+                                                nonlocal llm_interrupted_by_voice
+                                                llm.interrupt()
+                                                llm_task.cancel()
+                                                llm_interrupted_by_voice = True
+                                            tts.stop()
+                                            log.info(f"Conversa: Jarvis foi interrompido imediatamente ao detectar a palavra de parada '{cleaned_text}'.")
+
+                                    # Exibição do feedback de digitação em tempo real (apenas se o usuário ainda estiver falando)
+                                    if is_speaking:
+                                        if not partial_newline_printed:
+                                            sys.stdout.write("\n")
+                                            sys.stdout.flush()
+                                            partial_newline_printed = True
+                                        sys.stdout.write(f"\r\033[K[dim]🗣️  Escrevendo: {text}...[/dim]")
+                                        sys.stdout.flush()
+                        except Exception as e:
+                            log.error(f"Erro na transcrição parcial: {e}")
+                        finally:
+                            partial_in_progress = False
 
                     asyncio.create_task(transcribe_partial(partial_audio))
 

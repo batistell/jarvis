@@ -130,71 +130,69 @@ class LLMEngine:
         except Exception as e:
             log.warning("RAG: Falha ao recuperar contexto do VectorStore: {}", e)
 
-        queue: asyncio.Queue[str | Exception | None] = asyncio.Queue()
-
-        def _run_completion() -> None:
-            try:
-                assert self._model is not None
-
-                if language == "en":
-                    system_prompt = BUTLER_SYSTEM_PROMPT_EN
-                    user_content = prompt
-                    if context:
-                        user_content = (
-                            "You have access to your Master's personal files and knowledge base. "
-                            "Use the following relevant snippets to answer the Master's question. "
-                            "Since these files belong to and describe your Master, you can assume that personal pronouns (like 'I', 'my', 'me') refer to the person described in these files.\n\n"
-                            f"Relevant Context:\n{context}\n\n"
-                            f"Question: {prompt}"
-                        )
-                else:
-                    system_prompt = BUTLER_SYSTEM_PROMPT_PT
-                    user_content = prompt
-                    if context:
-                        user_content = (
-                            "Você tem acesso aos arquivos pessoais e base de conhecimento do seu Mestre. "
-                            "Use os seguintes trechos relevantes para responder à pergunta do Mestre. "
-                            "Como estes arquivos pertencem e descrevem o seu Mestre, você pode assumir que pronomes pessoais (como 'eu', 'meu', 'me') se referem à pessoa descrita nestes arquivos.\n\n"
-                            f"Contexto Relevante:\n{context}\n\n"
-                            f"Pergunta: {prompt}"
-                        )
-
-                messages = [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_content},
-                ]
-                
-                response_stream = self._model.create_chat_completion(
-                    messages=messages,
-                    max_tokens=self.settings.max_tokens,
-                    temperature=self.settings.temperature,
-                    top_p=self.settings.top_p,
-                    stream=True,
+        # Prepare messages
+        if language == "en":
+            system_prompt = BUTLER_SYSTEM_PROMPT_EN
+            user_content = prompt
+            if context:
+                user_content = (
+                    "You have access to your Master's personal files and knowledge base. "
+                    "Use the following relevant snippets to answer the Master's question. "
+                    "Since these files belong to and describe your Master, you can assume that personal pronouns (like 'I', 'my', 'me') refer to the person described in these files.\n\n"
+                    f"Relevant Context:\n{context}\n\n"
+                    f"Question: {prompt}"
                 )
-                
-                for chunk in response_stream:
-                    if self._is_cancelled:
-                        log.debug("LLM: Geração interrompida pelo sinal de cancelamento.")
-                        break
-                    delta = chunk["choices"][0]["delta"]
-                    if "content" in delta:
-                        # Envia token para a fila na thread principal
-                        loop.call_soon_threadsafe(queue.put_nowait, delta["content"])
+        else:
+            system_prompt = BUTLER_SYSTEM_PROMPT_PT
+            user_content = prompt
+            if context:
+                user_content = (
+                    "Você tem acesso aos arquivos pessoais e base de conhecimento do seu Mestre. "
+                    "Use os seguintes trechos relevantes para responder à pergunta do Mestre. "
+                    "Como estes arquivos pertencem e descrevem o seu Mestre, você pode assumir que pronomes pessoais (como 'eu', 'meu', 'me') se referem à pessoa descrita nestes arquivos.\n\n"
+                    f"Contexto Relevante:\n{context}\n\n"
+                    f"Pergunta: {prompt}"
+                )
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content},
+        ]
+
+        def _create_stream():
+            assert self._model is not None
+            return self._model.create_chat_completion(
+                messages=messages,
+                max_tokens=self.settings.max_tokens,
+                temperature=self.settings.temperature,
+                top_p=self.settings.top_p,
+                stream=True,
+            )
+
+        try:
+            response_stream = await loop.run_in_executor(self._executor, _create_stream)
+            iterator = iter(response_stream)
+        except Exception as e:
+            log.error("Erro ao iniciar stream do LLM: {}", e)
+            raise e
+
+        def _get_next_chunk(it):
+            try:
+                return next(it)
+            except StopIteration:
+                return None
             except Exception as e:
-                log.error("Erro na inferência do LLM: {}", e)
-                loop.call_soon_threadsafe(queue.put_nowait, e)
-            finally:
-                # Envia sentinela de encerramento
-                loop.call_soon_threadsafe(queue.put_nowait, None)
+                return e
 
-        # Dispara execução na thread secundária
-        self._executor.submit(_run_completion)
-
-        # Consome da fila e cede controle (yield) de forma assíncrona
-        while True:
-            item = await queue.get()
-            if item is None:
+        while not self._is_cancelled:
+            # Executa o passo de inferência do próximo token no executor de GPU compartilhado
+            chunk = await loop.run_in_executor(self._executor, _get_next_chunk, iterator)
+            if chunk is None:
                 break
-            if isinstance(item, Exception):
-                raise item
-            yield item
+            if isinstance(chunk, Exception):
+                log.error("Erro durante a inferência do token do LLM: {}", chunk)
+                raise chunk
+            
+            delta = chunk["choices"][0]["delta"]
+            if "content" in delta:
+                yield delta["content"]

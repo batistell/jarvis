@@ -54,6 +54,7 @@ class Transcriber:
 
         self._model: WhisperModel | None = None
         # Usa o executor compartilhado de thread única para GPU
+        # Isso garante compatibilidade com CUDA no Windows executando Whisper e LLM sequencialmente.
         self._executor = get_gpu_executor()
 
     def load_model(self) -> None:
@@ -151,7 +152,7 @@ class Transcriber:
 
         return text
 
-    def _run_transcription(self, audio: np.ndarray) -> tuple[str, str]:
+    def _run_transcription(self, audio: np.ndarray, is_partial: bool = False) -> tuple[str, str]:
         """Executa a transcrição síncrona (interna)."""
         if self._model is None:
             self.load_model()
@@ -171,6 +172,37 @@ class Transcriber:
             initial_prompt=self.initial_prompt,
         )
 
+        detected_lang = info.language
+
+        # Se o idioma detectado não estiver entre os suportados (pt, en), força uma decisão
+        if not is_partial and lang is None and detected_lang not in ("pt", "en"):
+            pt_prob = 0.0
+            en_prob = 0.0
+            if info.all_language_probs:
+                for l_code, prob in info.all_language_probs:
+                    if l_code == "pt":
+                        pt_prob = prob
+                    elif l_code == "en":
+                        en_prob = prob
+            
+            forced_lang = "pt" if pt_prob >= en_prob else "en"
+            log.info(
+                "STT: Idioma detectado '{}' não suportado. Refazendo transcrição forçando '{}' (pt_prob={:.4f}, en_prob={:.4f})",
+                detected_lang,
+                forced_lang,
+                pt_prob,
+                en_prob
+            )
+            detected_lang = forced_lang
+            segments, info = self._model.transcribe(
+                audio,
+                language=detected_lang,
+                beam_size=1,
+                best_of=1,
+                vad_filter=False,
+                initial_prompt=self.initial_prompt,
+            )
+
         # Junta os segmentos de texto
         text_segments = []
         for segment in segments:
@@ -178,17 +210,18 @@ class Transcriber:
 
         raw_text = "".join(text_segments).strip()
         cleaned_text = self._filter_hallucinations(raw_text)
-        return cleaned_text, info.language
+        return cleaned_text, detected_lang
 
-    async def transcribe(self, audio: np.ndarray) -> tuple[str, str]:
+    async def transcribe(self, audio: np.ndarray, is_partial: bool = False) -> tuple[str, str]:
         """Transcreve um buffer de áudio numpy de forma assíncrona.
 
         Args:
             audio: Array 1D do numpy contendo áudio em 16kHz float32.
+            is_partial: Se True, indica que é uma transcrição parcial (ignora re-transcrição de idioma).
 
         Returns:
             Tupla contendo (texto transcrito, código do idioma detectado).
         """
         loop = asyncio.get_running_loop()
         # Executa no thread pool para não bloquear o loop do asyncio
-        return await loop.run_in_executor(self._executor, self._run_transcription, audio)
+        return await loop.run_in_executor(self._executor, self._run_transcription, audio, is_partial)

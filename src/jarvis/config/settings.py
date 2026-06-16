@@ -88,7 +88,7 @@ class STTSettings(BaseSettings):
     
     # Prompt inicial contendo termos técnicos com forte foco em Java, Spring Boot, SQL e Kafka
     initial_prompt: str = (
-        "Java, JVM, JDK, Spring, Spring Boot, SpringBoot, Spring Data JPA, Hibernate, Maven, Gradle, "
+        "Jarvis, Java, JVM, JDK, Spring, Spring Boot, SpringBoot, Spring Data JPA, Hibernate, Maven, Gradle, "
         "Kafka, Apache Kafka, Zookeeper, KRaft, topic, partition, producer, consumer, broker, offset, "
         "Spring Kafka, @KafkaListener, @SpringBootApplication, @RestController, @Service, @Repository, "
         "@Component, @Autowired, @Bean, @Configuration, @Value, @Transactional, @Query, @Entity, @Table, @Id, "
