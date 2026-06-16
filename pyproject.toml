@@ -31,6 +31,7 @@ dependencies = [
     # --- Embeddings & Vector Store ---
     "sentence-transformers>=3.0",
     "chromadb>=0.5",
+    "pypdf>=4.0",
 
     # --- PostgreSQL ---
     "sqlalchemy[asyncio]>=2.0",

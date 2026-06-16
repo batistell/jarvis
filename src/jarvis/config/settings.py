@@ -118,10 +118,13 @@ class EmbeddingSettings(BaseSettings):
 
     model_config = SettingsConfigDict(env_prefix="JARVIS_EMBEDDING_")
 
-    model: str = "all-MiniLM-L6-v2"
-    device: str = "cpu"  # Embeddings rodam na CPU para não competir com LLM
-    chunk_size: int = 512
-    chunk_overlap: int = 64
+    model: str = "BAAI/bge-m3"
+    device: str = "cpu"  # Embeddings rodam na CPU no runtime para poupar VRAM da GPU (sobrescrito para cuda na ingestão)
+    chunk_size: int = 1000
+    chunk_overlap: int = 150
+    separators: list[str] = Field(
+        default_factory=lambda: ["\n## ", "\n# ", "\n\n", "\n", " ", ""]
+    )
 
 
 class ChromaSettings(BaseSettings):
