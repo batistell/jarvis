@@ -314,14 +314,14 @@ async def ws_audio_endpoint(websocket: WebSocket) -> None:
                 vad_chunk = sample_buffer[:480]
                 sample_buffer = sample_buffer[480:]
 
-                speech_detected = vad.is_speech(vad_chunk)
-
                 # Mantém tts_last_active_time atualizado se Jarvis estiver gerando ou tocando no navegador
                 import time
                 is_browser_playing = time.time() < (browser_tts_end_time + 0.5)
                 is_jarvis_busy = llm_generating or is_browser_playing or (tts_engine and tts_engine._is_playing) or (tts_engine and not tts_engine._queue.empty())
                 if is_jarvis_busy:
                     tts_last_active_time = time.time()
+
+                speech_detected = vad.is_speech(vad_chunk, is_jarvis_busy=is_jarvis_busy)
 
                 if speech_detected:
                     if not is_speaking:
@@ -485,7 +485,10 @@ async def ws_audio_endpoint(websocket: WebSocket) -> None:
             if is_speaking and len(audio_buffer) > 0 and not partial_in_progress:
                 import time
                 now = time.time()
-                if now - last_partial_time >= partial_interval_s:
+                is_browser_playing = time.time() < (browser_tts_end_time + 0.5)
+                is_jarvis_busy = llm_generating or is_browser_playing or (tts_engine and tts_engine._is_playing) or (tts_engine and not tts_engine._queue.empty())
+                current_interval = 0.20 if is_jarvis_busy else partial_interval_s
+                if now - last_partial_time >= current_interval:
                     last_partial_time = now
                     partial_audio = np.concatenate(audio_buffer, axis=0).flatten()
 

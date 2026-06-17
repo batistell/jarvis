@@ -68,11 +68,12 @@ class VADDetector:
                 self.rms_threshold,
             )
 
-    def is_speech(self, chunk: np.ndarray) -> bool:
+    def is_speech(self, chunk: np.ndarray, is_jarvis_busy: bool = False) -> bool:
         """Verifica se o bloco de áudio contém fala.
 
         Args:
             chunk: Array numpy contendo o áudio em float32.
+            is_jarvis_busy: Indica se Jarvis está ativamente falando ou gerando resposta.
 
         Returns:
             True se contiver fala, False caso contrário.
@@ -84,6 +85,11 @@ class VADDetector:
         if not self._calibrated:
             self.calibrate(rms)
 
+        # Ajusta dinamicamente a sensibilidade se Jarvis estiver falando/gerando.
+        # Reduzimos o limiar de RMS necessário (multiplicando por 0.4) para aumentar
+        # a sensibilidade, facilitando a detecção de stop words em volumes menores.
+        threshold = self.rms_threshold * 0.4 if is_jarvis_busy else self.rms_threshold
+
         # Se tivermos webrtcvad, tentamos usá-lo
         if self._vad is not None:
             try:
@@ -93,10 +99,10 @@ class VADDetector:
                 # webrtcvad suporta apenas frames de 10, 20 ou 30ms
                 is_speech_webrtc = self._vad.is_speech(int16_chunk, self.sample_rate)
                 # Dual-Gate: padrão de voz webrtc AND amplitude de energia acima do ruído calibrado
-                return is_speech_webrtc and rms > self.rms_threshold
+                return is_speech_webrtc and rms > threshold
             except Exception as e:
                 # Em caso de erro (ex: tamanho de frame inválido), faz fallback para RMS
                 log.debug("Erro no webrtcvad: {}. Usando fallback RMS.", e)
 
         # Fallback ou detector principal por energia RMS
-        return rms > self.rms_threshold
+        return rms > threshold

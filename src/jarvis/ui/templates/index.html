@@ -801,9 +801,6 @@
                 // Trata o status do Jarvis
                 if (data.type === 'status') {
                     updateStatus(data.status);
-                    if (data.status === 'thinking' || data.status === 'idle') {
-                        stopAllTTSAudio();
-                    }
                 }
 
                 // Trata novas mensagens textuais/de voz

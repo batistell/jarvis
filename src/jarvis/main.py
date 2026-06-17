@@ -512,13 +512,13 @@ async def run_stt_loop() -> None:
     mic.start()
     try:
         async for chunk in mic.stream():
-            # 1. Verifica se há fala no chunk de 30ms
-            speech_detected = vad.is_speech(chunk)
-
             # Mantém tts_last_active_time atualizado enquanto o Jarvis estiver ocupado gerando ou falando
             is_jarvis_busy = web.llm_generating or tts._is_playing or not tts._queue.empty()
             if is_jarvis_busy:
                 web.tts_last_active_time = time.time()
+
+            # 1. Verifica se há fala no chunk de 30ms
+            speech_detected = vad.is_speech(chunk, is_jarvis_busy=is_jarvis_busy)
 
             # Suspende a escuta de palmas enquanto o Jarvis ou o usuário estão falando
             mic.is_listening_for_claps = not (is_jarvis_busy or is_speaking)
@@ -749,7 +749,9 @@ async def run_stt_loop() -> None:
             # 2. Transcrição Parcial (Real-time Feedback)
             if is_speaking and len(audio_buffer) > 0 and not partial_in_progress:
                 now = time.time()
-                if now - last_partial_time >= partial_interval_s:
+                is_jarvis_busy = web.llm_generating or tts._is_playing or not tts._queue.empty()
+                current_interval = 0.20 if is_jarvis_busy else partial_interval_s
+                if now - last_partial_time >= current_interval:
                     last_partial_time = now
 
                     # Concatena o áudio acumulado até o momento
