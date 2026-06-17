@@ -23,6 +23,8 @@ class TTSEngine:
         self._queue: queue.Queue[tuple[str, str] | None] = queue.Queue()
         self._worker_thread: threading.Thread | None = None
         self._stop_event = threading.Event()
+        self.current_spoken_text = ""
+
 
     def _download_model(self, lang: str) -> tuple[Path, Path]:
         """Baixa o modelo e configuração do Piper caso não existam localmente."""
@@ -108,6 +110,13 @@ class TTSEngine:
             text, lang = item
             try:
                 self._is_playing = True
+                
+                # Normaliza e limpa a frase atual para facilitar comparações de eco
+                cleaned_text = text.lower().strip()
+                for p in [".", ",", "!", "?", "-", '"', "'"]:
+                    cleaned_text = cleaned_text.replace(p, "")
+                self.current_spoken_text = cleaned_text.strip()
+                
                 voice = self.load_model(lang)
                 
                 from piper.config import SynthesisConfig
@@ -122,6 +131,7 @@ class TTSEngine:
             except Exception as e:
                 logger.error(f"TTS: Erro na síntese/reprodução: {e}")
             finally:
+                self.current_spoken_text = ""
                 self._is_playing = False
                 self._queue.task_done()
 

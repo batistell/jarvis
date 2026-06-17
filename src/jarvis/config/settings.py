@@ -112,6 +112,9 @@ class AudioSettings(BaseSettings):
     vad_aggressiveness: int = 2  # 0-3 (mais alto = mais agressivo)
     silence_threshold_ms: int = 800  # ms de silêncio para finalizar frase
     chunk_duration_ms: int = 30  # duração de cada chunk de áudio (ms)
+    noise_reduction_enabled: bool = True
+    full_duplex_cooldown_ms: int = 15000
+
 
 
 class EmbeddingSettings(BaseSettings):

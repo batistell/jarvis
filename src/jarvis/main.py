@@ -277,6 +277,9 @@ async def run_stt_loop() -> None:
     audio_buffer: list[np.ndarray] = []
     is_speaking = False
     silent_chunks = 0
+    tts_last_active_time = 0.0
+    conversa_fluida_active = False
+
 
     # Controle de tarefas assíncronas para o LLM
     llm_task: asyncio.Task | None = None
@@ -349,6 +352,26 @@ async def run_stt_loop() -> None:
             # 1. Verifica se há fala no chunk de 30ms
             speech_detected = vad.is_speech(chunk)
 
+            # Mantém tts_last_active_time atualizado enquanto o Jarvis estiver ocupado gerando ou falando
+            is_jarvis_busy = llm_generating or tts._is_playing or not tts._queue.empty()
+            if is_jarvis_busy:
+                tts_last_active_time = time.time()
+
+            # Atualização dinâmica do indicador visual no console para Conversa Fluida
+            now = time.time()
+            if tts_last_active_time > 0.0:
+                is_conversa_fluida = (now - tts_last_active_time) < (settings.audio.full_duplex_cooldown_ms / 1000)
+                if is_conversa_fluida:
+                    # Mostra o indicador somente quando Jarvis terminar de falar/processar para não poluir
+                    if not is_jarvis_busy and not conversa_fluida_active:
+                        conversa_fluida_active = True
+                        console.print("\n[bold yellow]⚡ Escuta Direta Ativa (Pode falar sem chamar 'Jarvis')...[/bold yellow]")
+                else:
+                    if conversa_fluida_active:
+                        conversa_fluida_active = False
+                        console.print("\n[dim]💤 Escuta Ociosa (Diga 'Jarvis' para reativar).[/dim]")
+
+
             if speech_detected:
                 if not is_speaking:
                     is_speaking = True
@@ -380,13 +403,50 @@ async def run_stt_loop() -> None:
                                     # Define se Jarvis estava ativo (gerando, falando ou recém-interrompido)
                                     was_jarvis_active = llm_generating or tts._is_playing or not tts._queue.empty() or llm_interrupted_by_voice
 
+                                    # Limpa a transcrição para verificar se é eco da própria voz do Jarvis
+                                    final_text_clean = final_text.lower().strip()
+                                    for p in [".", ",", "!", "?", "-", '"', "'"]:
+                                        final_text_clean = final_text_clean.replace(p, "")
+                                    final_text_clean = final_text_clean.strip()
+
+                                    # Rastreia e cancela se for eco do TTS
+                                    is_echo = False
+                                    current_spoken = tts.current_spoken_text
+                                    if current_spoken:
+                                        # 1. Correspondência direta de substring
+                                        if final_text_clean in current_spoken or current_spoken in final_text_clean:
+                                            is_echo = True
+                                        # 2. Correspondência de interseção de palavras
+                                        else:
+                                            words_trans = set(final_text_clean.split())
+                                            words_spok = set(current_spoken.split())
+                                            if words_trans and words_spok:
+                                                intersection = words_trans.intersection(words_spok)
+                                                if len(intersection) / len(words_trans) > 0.6:
+                                                    is_echo = True
+
+                                    if is_echo:
+                                        log.info("AEC: Transcrição de eco ignorada: '{}'", final_text)
+                                        audio_buffer.clear()
+                                        silent_chunks = 0
+                                        llm_interrupted_by_voice = False
+                                        continue
+
                                     # Definição das palavras de parada e ativação suportadas
                                     stop_words = ("jarvis", "para", "pare", "parar", "cala a boca", "silêncio", "quieto", "stop", "shut up", "be quiet", "silence", "pera", "espera", "calma", "chega", "shh", "shush")
 
+                                    # Define se estamos no período de conversa continuada
+                                    is_conversa_fluida = False
+                                    if tts_last_active_time > 0.0:
+                                        is_conversa_fluida = (time.time() - tts_last_active_time) < (settings.audio.full_duplex_cooldown_ms / 1000)
+
                                     # Se Jarvis estava ativo, interrompe apenas com palavras de parada suportadas.
-                                    # Se Jarvis estava ocioso, exige a palavra de ativação "jarvis".
+                                    # Se estiver na janela de conversa fluida, aceita qualquer comando diretamente.
+                                    # Se estiver ocioso, exige a palavra de ativação "jarvis".
                                     if was_jarvis_active:
                                         should_process = any(word in final_text.lower() for word in stop_words)
+                                    elif is_conversa_fluida:
+                                        should_process = True
                                     else:
                                         should_process = "jarvis" in final_text.lower()
 
