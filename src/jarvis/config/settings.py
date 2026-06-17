@@ -114,6 +114,7 @@ class AudioSettings(BaseSettings):
     chunk_duration_ms: int = 30  # duração de cada chunk de áudio (ms)
     noise_reduction_enabled: bool = True
     full_duplex_cooldown_ms: int = 15000
+    clap_threshold: float = 0.35
 
 
 

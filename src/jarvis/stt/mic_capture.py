@@ -7,6 +7,7 @@ e disponibilizá-los em um gerador assíncrono.
 from __future__ import annotations
 
 import asyncio
+import time
 from typing import AsyncGenerator
 
 import numpy as np
@@ -48,6 +49,13 @@ class MicCapture:
             self.chunk_size = int(self.sample_rate * (self.chunk_duration_ms / 1000))  # 480 samples
             self.noise_reducer = None
 
+        # Configurações do detector de palmas
+        self.clap_threshold = settings.audio.clap_threshold
+        self.last_clap_time = 0.0
+        self.cooldown_ends = 0.0
+        self.on_double_clap = None
+        self.is_listening_for_claps = True
+
         self._queue: asyncio.Queue[np.ndarray] = asyncio.Queue()
         self._loop = asyncio.get_running_loop()
         self._stream: sd.InputStream | None = None
@@ -60,7 +68,34 @@ class MicCapture:
         if status:
             log.warning("Status do stream de áudio: {}", status)
 
-        audio_data = indata.copy()
+        # Copia o áudio bruto antes da redução de ruído para processamento de transientes
+        raw_audio = indata.copy()
+
+        # Detector de Palmas
+        if self.is_listening_for_claps:
+            try:
+                # Pico máximo absoluto no chunk bruto
+                max_val = float(np.max(np.abs(raw_audio)))
+                if max_val > self.clap_threshold:
+                    now = time.time()
+                    if now > self.cooldown_ends:
+                        self.cooldown_ends = now + 0.15  # Cooldown de 150ms
+                        
+                        if self.last_clap_time > 0.0 and (0.15 <= (now - self.last_clap_time) <= 0.8):
+                            log.info("MicCapture: Duas palmas detectadas! Acionando callback.")
+                            self.last_clap_time = 0.0
+                            if self.on_double_clap:
+                                self._loop.call_soon_threadsafe(self.on_double_clap)
+                        else:
+                            self.last_clap_time = now
+                
+                # Excedeu a janela de tempo de 800ms: descarta a primeira palma
+                if self.last_clap_time > 0.0 and (time.time() - self.last_clap_time > 0.8):
+                    self.last_clap_time = 0.0
+            except Exception as e:
+                log.error("Erro no detector de palmas: {}", e)
+
+        audio_data = raw_audio
         
         if self.noise_reduction_enabled and self.noise_reducer:
             try:

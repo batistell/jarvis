@@ -265,6 +265,56 @@ async def run_stt_loop() -> None:
         else:
             console.print("[yellow]⚠️ Nenhum dispositivo encontrado ou falha na conexão com o Home Assistant.[/yellow]\n")
 
+    # Define a ação executada ao detectar duas palmas
+    async def handle_double_clap() -> None:
+        log.info("Conversa: Callback de duas palmas disparado!")
+        console.print("\n[bold yellow]👏 Duas Palmas Detectadas! Executando ação...[/bold yellow]")
+        
+        # Procura a primeira lâmpada configurada no Home Assistant, priorizando 'office' / 'escritorio'
+        light_entity = None
+        fallback_light = None
+        if ha_client and ha_client.entities:
+            for e in ha_client.entities:
+                if e["entity_id"].startswith("light."):
+                    name_lower = e["name"].lower()
+                    id_lower = e["entity_id"].lower()
+                    
+                    # Prioriza qualquer luz que contenha "office", "escritorio" ou "escritório"
+                    if "office" in name_lower or "office" in id_lower or \
+                       "escritorio" in name_lower or "escritorio" in id_lower or \
+                       "escritório" in name_lower:
+                        light_entity = e
+                        break
+                    
+                    # Salva a primeira luz genérica caso não encontre nenhuma do escritório
+                    if fallback_light is None:
+                        fallback_light = e
+            
+            # Se não encontrou nenhuma luz de escritório, usa o fallback genérico
+            if not light_entity:
+                light_entity = fallback_light
+        
+        if light_entity:
+            entity_id = light_entity["entity_id"]
+            name = light_entity["name"]
+            log.info("Palmas: Alternando estado da luz: {} ({})", name, entity_id)
+            
+            # Executa a alternância assíncrona
+            asyncio.create_task(
+                ha_client.control_entity(
+                    domain="light",
+                    service="toggle",
+                    entity_id=entity_id
+                )
+            )
+            tts.speak_stream("Luz alternada, Senhor.", "pt")
+        else:
+            log.info("Palmas: Nenhuma luz encontrada no Home Assistant. Emitindo confirmação verbal.")
+            tts.speak_stream("Sim, Senhor. Detectei duas palmas.", "pt")
+
+    mic.on_double_clap = lambda: asyncio.create_task(handle_double_clap())
+
+
     # Parâmetros de controle
     # Silêncio necessário para fechar uma frase (ms)
     silence_threshold_ms = settings.audio.silence_threshold_ms
@@ -356,6 +406,9 @@ async def run_stt_loop() -> None:
             is_jarvis_busy = llm_generating or tts._is_playing or not tts._queue.empty()
             if is_jarvis_busy:
                 tts_last_active_time = time.time()
+
+            # Suspende a escuta de palmas enquanto o Jarvis ou o usuário estão falando
+            mic.is_listening_for_claps = not (is_jarvis_busy or is_speaking)
 
             # Atualização dinâmica do indicador visual no console para Conversa Fluida
             now = time.time()
