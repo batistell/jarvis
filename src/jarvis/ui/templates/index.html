@@ -5,20 +5,21 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Jarvis — Web Dashboard</title>
     <!-- Google Fonts -->
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&family=Outfit:wght@400;600;800&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;600;800;900&family=Share+Tech+Mono&family=Inter:wght@300;400;600;700&display=swap" rel="stylesheet">
     <style>
         :root {
-            --bg-color: #05060f;
-            --card-bg: rgba(20, 22, 45, 0.45);
-            --border-color: rgba(147, 51, 234, 0.2);
-            --primary: #9333ea;
-            --primary-glow: rgba(147, 51, 234, 0.4);
-            --secondary: #06b6d4;
-            --secondary-glow: rgba(6, 182, 212, 0.4);
-            --text-color: #f3f4f6;
-            --text-muted: #9ca3af;
-            --accent-green: #10b981;
-            --accent-red: #ef4444;
+            --bg-color: #080300;
+            --card-bg: rgba(25, 10, 2, 0.45);
+            --border-color: rgba(255, 85, 0, 0.25);
+            --primary: #ff5500;
+            --primary-glow: rgba(255, 85, 0, 0.45);
+            --secondary: #ffaa00;
+            --secondary-glow: rgba(255, 170, 0, 0.45);
+            --text-color: #ffe6d5;
+            --text-muted: #ba8f75;
+            --accent-green: #ffaa00;
+            --accent-red: #ff3333;
+            --grid-color: rgba(255, 85, 0, 0.04);
         }
 
         * {
@@ -36,8 +37,24 @@
             flex-direction: column;
             overflow-x: hidden;
             background-image: 
-                radial-gradient(circle at 10% 20%, rgba(147, 51, 234, 0.08) 0%, transparent 40%),
-                radial-gradient(circle at 90% 80%, rgba(6, 182, 212, 0.08) 0%, transparent 40%);
+                linear-gradient(var(--grid-color) 1px, transparent 1px),
+                linear-gradient(90deg, var(--grid-color) 1px, transparent 1px),
+                radial-gradient(circle at 50% 30%, rgba(255, 85, 0, 0.08) 0%, transparent 60%);
+            background-size: 30px 30px, 30px 30px, 100% 100%;
+            position: relative;
+        }
+
+        /* Scanline animation overlay */
+        body::after {
+            content: " ";
+            display: block;
+            position: fixed;
+            top: 0; left: 0; bottom: 0; right: 0;
+            background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.15) 50%), linear-gradient(90deg, rgba(255, 0, 0, 0.03), rgba(0, 255, 0, 0.01), rgba(0, 0, 255, 0.03));
+            z-index: 9999;
+            opacity: 0.08;
+            pointer-events: none;
+            background-size: 100% 4px, 6px 100%;
         }
 
         header {
@@ -47,10 +64,11 @@
             align-items: center;
             border-bottom: 1px solid var(--border-color);
             backdrop-filter: blur(12px);
-            background: rgba(5, 6, 15, 0.7);
+            background: rgba(8, 3, 0, 0.85);
             position: sticky;
             top: 0;
             z-index: 100;
+            box-shadow: 0 4px 20px rgba(255, 85, 0, 0.05);
         }
 
         .logo-container {
@@ -60,49 +78,108 @@
         }
 
         .logo-icon {
-            width: 32px;
-            height: 32px;
+            width: 34px;
+            height: 34px;
             border-radius: 50%;
-            background: linear-gradient(135deg, var(--primary), var(--secondary));
+            border: 2px dashed var(--primary);
             box-shadow: 0 0 15px var(--primary-glow);
             position: relative;
-            animation: pulse-glow 2s infinite alternate;
+            animation: rotate-hud 10s linear infinite;
+            display: flex;
+            align-items: center;
+            justify-content: center;
         }
 
-        @keyframes pulse-glow {
-            from { box-shadow: 0 0 10px var(--primary-glow); }
-            to { box-shadow: 0 0 22px var(--primary-glow), 0 0 10px var(--secondary-glow); }
+        .logo-icon::before {
+            content: '';
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            border: 2px solid var(--secondary);
+            box-shadow: 0 0 8px var(--secondary-glow);
+            position: absolute;
+            animation: rotate-hud-reverse 5s linear infinite;
+        }
+
+        @keyframes rotate-hud {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+
+        @keyframes rotate-hud-reverse {
+            from { transform: rotate(360deg); }
+            to { transform: rotate(0deg); }
         }
 
         h1 {
-            font-family: 'Outfit', sans-serif;
-            font-size: 24px;
+            font-family: 'Orbitron', sans-serif;
+            font-size: 22px;
             font-weight: 800;
-            background: linear-gradient(to right, #fff, #a78bfa);
+            background: linear-gradient(to right, #fff, var(--secondary));
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
+            letter-spacing: 2px;
         }
 
         .status-badge {
-            background: rgba(16, 185, 129, 0.1);
-            border: 1px solid rgba(16, 185, 129, 0.3);
-            color: var(--accent-green);
+            background: rgba(255, 85, 0, 0.1);
+            border: 1px solid rgba(255, 85, 0, 0.35);
+            color: var(--secondary);
             padding: 6px 14px;
-            border-radius: 20px;
-            font-size: 12px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-family: 'Orbitron', sans-serif;
             font-weight: 600;
             display: flex;
             align-items: center;
             gap: 6px;
+            box-shadow: 0 0 10px rgba(255, 85, 0, 0.15);
+            text-transform: uppercase;
+            letter-spacing: 1px;
         }
 
         .status-dot {
             width: 8px;
             height: 8px;
             border-radius: 50%;
-            background-color: var(--accent-green);
-            box-shadow: 0 0 8px var(--accent-green);
+            background-color: var(--secondary);
+            box-shadow: 0 0 8px var(--secondary);
             animation: blink 1.5s infinite;
+        }
+
+        .fluida-badge-bottom {
+            background: rgba(255, 170, 0, 0.08);
+            border: 1px dashed rgba(255, 170, 0, 0.35);
+            color: #ffaa00;
+            padding: 8px 16px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-family: 'Share Tech Mono', monospace;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-top: 10px;
+            box-shadow: 0 0 10px rgba(255, 170, 0, 0.1);
+            animation: pulse-border 1.5s infinite alternate;
+        }
+
+        .fluida-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background-color: #ffaa00;
+            box-shadow: 0 0 8px #ffaa00;
+            animation: blink-fast 0.8s infinite;
+        }
+
+        @keyframes blink-fast {
+            0%, 100% { opacity: 0.4; }
+            50% { opacity: 1; }
+        }
+
+        @keyframes pulse-border {
+            from { border-color: rgba(255, 170, 0, 0.3); box-shadow: 0 0 6px rgba(255, 170, 0, 0.1); }
+            to { border-color: rgba(255, 170, 0, 0.7); box-shadow: 0 0 12px rgba(255, 170, 0, 0.4); }
         }
 
         @keyframes blink {
@@ -132,13 +209,13 @@
         .chat-card {
             background: var(--card-bg);
             border: 1px solid var(--border-color);
-            border-radius: 16px;
+            border-radius: 8px;
             backdrop-filter: blur(16px);
             padding: 24px;
             display: flex;
             flex-direction: column;
             height: 550px;
-            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.5);
         }
 
         .chat-header {
@@ -151,9 +228,11 @@
         }
 
         .chat-title {
-            font-family: 'Outfit', sans-serif;
-            font-size: 18px;
+            font-family: 'Orbitron', sans-serif;
+            font-size: 16px;
             font-weight: 600;
+            letter-spacing: 1px;
+            color: var(--secondary);
         }
 
         .chat-history {
@@ -174,18 +253,19 @@
             background: transparent;
         }
         .chat-history::-webkit-scrollbar-thumb {
-            background: rgba(147, 51, 234, 0.3);
-            border-radius: 10px;
+            background: rgba(255, 85, 0, 0.3);
+            border-radius: 4px;
         }
 
-        .chat-bubble {
-            max-width: 75%;
-            padding: 14px 18px;
-            border-radius: 16px;
-            line-height: 1.5;
+        .chat-line {
+            display: flex;
+            flex-direction: column;
+            width: 100%;
+            margin-bottom: 16px;
+            font-family: 'Share Tech Mono', monospace;
             font-size: 14px;
-            position: relative;
-            animation: fade-in-up 0.3s ease-out;
+            line-height: 1.6;
+            animation: fade-in-up 0.2s ease-out;
         }
 
         @keyframes fade-in-up {
@@ -193,27 +273,44 @@
             to { opacity: 1; transform: translateY(0); }
         }
 
-        .chat-bubble.user {
-            background: linear-gradient(135deg, rgba(6, 182, 212, 0.2), rgba(6, 182, 212, 0.05));
-            border: 1px solid rgba(6, 182, 212, 0.25);
-            align-self: flex-end;
-            border-bottom-right-radius: 4px;
+        .chat-line .line-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-weight: bold;
+            margin-bottom: 4px;
+            letter-spacing: 0.5px;
         }
 
-        .chat-bubble.jarvis {
-            background: linear-gradient(135deg, rgba(147, 51, 234, 0.2), rgba(147, 51, 234, 0.05));
-            border: 1px solid rgba(147, 51, 234, 0.25);
-            align-self: flex-start;
-            border-bottom-left-radius: 4px;
+        .chat-line.user .line-header {
+            color: var(--secondary);
         }
 
-        .bubble-meta {
+        .chat-line.jarvis .line-header {
+            color: #00ffcc;
+        }
+
+        .chat-line .line-content {
+            white-space: pre-wrap;
+            word-break: break-word;
+            padding-left: 12px;
+            border-left: 2px solid rgba(255, 85, 0, 0.35);
+            color: var(--text-color);
+        }
+
+        .chat-line.user .line-content {
+            border-left-color: rgba(255, 170, 0, 0.35);
+        }
+
+        .chat-line.jarvis .line-content {
+            border-left-color: rgba(0, 255, 204, 0.35);
+        }
+
+        .chat-line .line-meta {
             font-size: 10px;
             color: var(--text-muted);
-            margin-top: 6px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
+            margin-top: 4px;
+            padding-left: 12px;
         }
 
         .chat-input-container {
@@ -224,30 +321,34 @@
 
         .chat-input {
             flex: 1;
-            background: rgba(5, 6, 15, 0.6);
+            background: rgba(25, 10, 2, 0.6);
             border: 1px solid var(--border-color);
-            border-radius: 10px;
+            border-radius: 4px;
             padding: 12px 18px;
             color: var(--text-color);
             font-size: 14px;
             outline: none;
-            transition: border-color 0.3s;
+            transition: all 0.3s;
         }
 
         .chat-input:focus {
             border-color: var(--secondary);
-            box-shadow: 0 0 8px rgba(6, 182, 212, 0.2);
+            box-shadow: 0 0 10px var(--secondary-glow);
         }
 
         .send-btn {
             background: linear-gradient(135deg, var(--primary), var(--secondary));
             border: none;
-            border-radius: 10px;
-            color: #fff;
+            border-radius: 4px;
+            color: #000;
+            font-family: 'Orbitron', sans-serif;
+            font-size: 12px;
+            letter-spacing: 0.5px;
             padding: 0 20px;
-            font-weight: 600;
+            font-weight: 700;
             cursor: pointer;
             transition: opacity 0.3s, transform 0.2s;
+            box-shadow: 0 0 10px rgba(255, 85, 0, 0.2);
         }
 
         .send-btn:hover {
@@ -262,7 +363,7 @@
         .audio-control-card {
             background: var(--card-bg);
             border: 1px solid var(--border-color);
-            border-radius: 16px;
+            border-radius: 8px;
             padding: 20px;
             display: flex;
             flex-direction: column;
@@ -273,9 +374,10 @@
         .waveform-canvas {
             width: 100%;
             height: 90px;
-            background: rgba(5, 6, 15, 0.7);
-            border-radius: 10px;
-            border: 1px solid rgba(255, 255, 255, 0.05);
+            background: rgba(8, 3, 0, 0.75);
+            border-radius: 4px;
+            border: 1px solid rgba(255, 85, 0, 0.15);
+            box-shadow: inset 0 0 10px rgba(255, 85, 0, 0.1);
         }
 
         .audio-buttons {
@@ -285,11 +387,14 @@
         }
 
         .control-btn {
-            background: rgba(147, 51, 234, 0.1);
+            background: rgba(255, 85, 0, 0.08);
             border: 1px solid var(--primary);
             color: var(--text-color);
             padding: 10px 24px;
-            border-radius: 30px;
+            border-radius: 4px;
+            font-family: 'Orbitron', sans-serif;
+            font-size: 11px;
+            letter-spacing: 0.5px;
             font-weight: 600;
             cursor: pointer;
             display: flex;
@@ -299,18 +404,19 @@
         }
 
         .control-btn:hover {
-            background: var(--primary);
-            box-shadow: 0 0 15px var(--primary-glow);
+            background: rgba(255, 85, 0, 0.2);
+            box-shadow: 0 0 12px var(--primary-glow);
         }
 
         .control-btn.active-record {
             background: var(--accent-red);
             border-color: var(--accent-red);
-            box-shadow: 0 0 15px rgba(239, 68, 68, 0.4);
+            box-shadow: 0 0 15px rgba(255, 51, 51, 0.4);
+            color: #fff;
         }
 
         .control-btn.muted {
-            background: rgba(239, 68, 68, 0.2);
+            background: rgba(255, 51, 51, 0.15);
             border-color: var(--accent-red);
             color: var(--accent-red);
         }
@@ -330,22 +436,24 @@
         .sidebar-card {
             background: var(--card-bg);
             border: 1px solid var(--border-color);
-            border-radius: 16px;
+            border-radius: 8px;
             backdrop-filter: blur(16px);
             padding: 20px;
-            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.5);
         }
 
         .card-header-sidebar {
-            font-family: 'Outfit', sans-serif;
-            font-size: 16px;
+            font-family: 'Orbitron', sans-serif;
+            font-size: 14px;
             font-weight: 600;
             margin-bottom: 16px;
             padding-bottom: 8px;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            border-bottom: 1px solid rgba(255, 85, 0, 0.15);
             display: flex;
             align-items: center;
             gap: 8px;
+            letter-spacing: 1px;
+            color: var(--secondary);
         }
 
         /* Telemetria GPU */
@@ -362,30 +470,35 @@
         }
 
         .stat-label {
-            font-size: 13px;
+            font-size: 11px;
+            font-family: 'Orbitron', sans-serif;
+            letter-spacing: 0.5px;
             color: var(--text-muted);
         }
 
         .stat-value {
-            font-size: 14px;
+            font-size: 13px;
+            font-family: 'Share Tech Mono', monospace;
             font-weight: 600;
         }
 
         .progress-bar-container {
             width: 100%;
             height: 6px;
-            background: rgba(255, 255, 255, 0.05);
-            border-radius: 3px;
+            background: rgba(255, 85, 0, 0.08);
+            border-radius: 1px;
             overflow: hidden;
             margin-top: 4px;
+            border: 1px solid rgba(255, 85, 0, 0.15);
         }
 
         .progress-bar-fill {
             height: 100%;
             background: linear-gradient(to right, var(--primary), var(--secondary));
-            border-radius: 3px;
+            border-radius: 1px;
             width: 0%;
             transition: width 0.5s ease-out;
+            box-shadow: 0 0 8px var(--primary-glow);
         }
 
         .gauge-container {
@@ -396,21 +509,23 @@
         }
 
         .mini-gauge {
-            background: rgba(5, 6, 15, 0.4);
-            border: 1px solid rgba(255, 255, 255, 0.03);
-            border-radius: 10px;
+            background: rgba(25, 10, 2, 0.35);
+            border: 1px solid rgba(255, 85, 0, 0.15);
+            border-radius: 4px;
             padding: 12px;
             display: flex;
             flex-direction: column;
             align-items: center;
             gap: 6px;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.2);
         }
 
         .gauge-val {
-            font-size: 20px;
-            font-family: 'Outfit', sans-serif;
+            font-size: 22px;
+            font-family: 'Share Tech Mono', monospace;
             font-weight: 700;
             color: var(--secondary);
+            text-shadow: 0 0 8px var(--secondary-glow);
         }
 
         /* Home Assistant Card */
@@ -424,9 +539,9 @@
         }
 
         .ha-device-item {
-            background: rgba(5, 6, 15, 0.4);
-            border: 1px solid rgba(255, 255, 255, 0.03);
-            border-radius: 10px;
+            background: rgba(25, 10, 2, 0.35);
+            border: 1px solid rgba(255, 85, 0, 0.15);
+            border-radius: 4px;
             padding: 10px 14px;
             display: flex;
             justify-content: space-between;
@@ -435,7 +550,8 @@
         }
 
         .ha-device-item:hover {
-            border-color: rgba(6, 182, 212, 0.15);
+            border-color: rgba(255, 170, 0, 0.3);
+            box-shadow: 0 0 10px rgba(255, 85, 0, 0.1);
         }
 
         .device-info {
@@ -444,11 +560,14 @@
         }
 
         .device-name {
-            font-size: 13px;
+            font-family: 'Orbitron', sans-serif;
+            font-size: 12px;
             font-weight: 600;
+            letter-spacing: 0.5px;
         }
 
         .device-entity {
+            font-family: 'Share Tech Mono', monospace;
             font-size: 10px;
             color: var(--text-muted);
             margin-top: 2px;
@@ -472,10 +591,10 @@
             position: absolute;
             cursor: pointer;
             top: 0; left: 0; right: 0; bottom: 0;
-            background-color: rgba(255, 255, 255, 0.1);
+            background-color: rgba(255, 85, 0, 0.1);
             transition: .3s;
-            border-radius: 34px;
-            border: 1px solid rgba(255, 255, 255, 0.05);
+            border-radius: 4px;
+            border: 1px solid rgba(255, 85, 0, 0.25);
         }
 
         .toggle-slider:before {
@@ -487,16 +606,18 @@
             bottom: 3px;
             background-color: var(--text-color);
             transition: .3s;
-            border-radius: 50%;
+            border-radius: 2px;
         }
 
         input:checked + .toggle-slider {
-            background-color: var(--secondary);
+            background-color: rgba(255, 170, 0, 0.3);
+            border-color: var(--secondary);
             box-shadow: 0 0 8px var(--secondary-glow);
         }
 
         input:checked + .toggle-slider:before {
             transform: translateX(16px);
+            background-color: var(--secondary);
         }
 
         @media (max-width: 900px) {
@@ -517,9 +638,11 @@
             <div class="logo-icon"></div>
             <h1>JARVIS</h1>
         </div>
-        <div class="status-badge">
-            <div class="status-dot"></div>
-            <span id="jarvis-status-txt">ONLINE</span>
+        <div class="header-badges" style="display: flex; gap: 12px; align-items: center;">
+            <div class="status-badge">
+                <div class="status-dot"></div>
+                <span id="jarvis-status-txt">ONLINE</span>
+            </div>
         </div>
     </header>
 
@@ -532,14 +655,20 @@
                     <div style="font-size: 11px; color: var(--text-muted);" id="connection-status">Desconectado</div>
                 </div>
                 <div class="chat-history" id="chat-box">
-                    <div class="chat-bubble jarvis">
-                        Olá, Senhor. Estou à sua disposição.
-                        <div class="bubble-meta">
-                            <span>Jarvis</span>
-                            <span>Sistema</span>
+                    <div class="chat-line jarvis">
+                        <div class="line-header">
+                            <span>🤖 JARVIS</span> <span style="font-size: 10px; color: var(--text-muted); font-weight: normal;">[Sistema]</span>
                         </div>
+                        <div class="line-content">Olá, Senhor. Estou à sua disposição.</div>
+                        <div class="line-meta">Sistema pronto.</div>
                     </div>
                 </div>
+                
+                <div class="fluida-badge-bottom" id="fluida-badge-element" style="display: none;">
+                    <div class="fluida-dot"></div>
+                    <span>⚡ ESCUTA DIRETA ATIVA (Fale sem dizer 'Jarvis')</span>
+                </div>
+
                 <div class="chat-input-container">
                     <input type="text" class="chat-input" id="chat-input-text" placeholder="Digite uma instrução para o Jarvis...">
                     <button class="send-btn" id="send-btn-action">Enviar</button>
@@ -662,6 +791,11 @@
                     } else {
                         tempText.style.color = 'var(--secondary)';
                     }
+                    
+                    // Atualiza o indicador visual da Escuta Direta Ativa (Conversa Fluida)
+                    if (data.hasOwnProperty('conversa_fluida')) {
+                        updateConversaFluida(data.conversa_fluida);
+                    }
                 }
 
                 // Trata o status do Jarvis
@@ -683,7 +817,7 @@
                     } else if (data.sender === 'jarvis' && activeJarvisBubble) {
                         // Finaliza a bolha de streaming atual
                         activeJarvisBubble.classList.remove('generating');
-                        const contentSpan = activeJarvisBubble.querySelector('.bubble-content');
+                        const contentSpan = activeJarvisBubble.querySelector('.line-content');
                         if (contentSpan) {
                             contentSpan.innerText = data.text;
                         }
@@ -706,6 +840,17 @@
             };
         }
 
+        const fluidaBadge = document.getElementById('fluida-badge-element');
+        function updateConversaFluida(isActive) {
+            if (fluidaBadge) {
+                if (isActive) {
+                    fluidaBadge.style.display = 'flex';
+                } else {
+                    fluidaBadge.style.display = 'none';
+                }
+            }
+        }
+
         function updateStatus(status) {
             if (status === 'recording') {
                 statusDot.style.backgroundColor = 'var(--accent-red)';
@@ -713,61 +858,71 @@
                 statusTxt.innerText = 'GRAVANDO';
                 statusTxt.style.color = 'var(--accent-red)';
             } else if (status === 'thinking') {
-                statusDot.style.backgroundColor = 'orange';
-                statusDot.style.boxShadow = '0 0 8px orange';
+                statusDot.style.backgroundColor = '#ffaa00';
+                statusDot.style.boxShadow = '0 0 8px #ffaa00';
                 statusTxt.innerText = 'PROCESSANDO';
-                statusTxt.style.color = 'orange';
+                statusTxt.style.color = '#ffaa00';
             } else if (status === 'speaking') {
-                statusDot.style.backgroundColor = 'var(--secondary)';
-                statusDot.style.boxShadow = '0 0 8px var(--secondary-glow)';
+                statusDot.style.backgroundColor = 'var(--primary)';
+                statusDot.style.boxShadow = '0 0 8px var(--primary-glow)';
                 statusTxt.innerText = 'FALANDO';
-                statusTxt.style.color = 'var(--secondary)';
+                statusTxt.style.color = 'var(--primary)';
             } else {
-                statusDot.style.backgroundColor = 'var(--accent-green)';
-                statusDot.style.boxShadow = '0 0 8px var(--accent-green)';
+                statusDot.style.backgroundColor = 'var(--secondary)';
+                statusDot.style.boxShadow = '0 0 8px var(--secondary)';
                 statusTxt.innerText = 'ONLINE';
-                statusTxt.style.color = 'var(--accent-green)';
+                statusTxt.style.color = 'var(--secondary)';
             }
         }
 
         function addMessageToUI(sender, text, origin) {
             const isUser = sender === 'user';
             
-            const bubble = document.createElement('div');
-            bubble.className = `chat-bubble ${isUser ? 'user' : 'jarvis'}`;
+            const line = document.createElement('div');
+            line.className = `chat-line ${isUser ? 'user' : 'jarvis'}`;
             
-            const contentSpan = document.createElement('span');
-            contentSpan.className = 'bubble-content';
+            const header = document.createElement('div');
+            header.className = 'line-header';
+            header.innerHTML = `<span>${isUser ? '🗣️ VOCÊ' : '🤖 JARVIS'}</span> <span style="font-size: 10px; color: var(--text-muted); font-weight: normal;">[${origin || 'Sistema'}]</span>`;
+            line.appendChild(header);
+
+            const contentSpan = document.createElement('div');
+            contentSpan.className = 'line-content';
             contentSpan.innerText = text;
-            bubble.appendChild(contentSpan);
+            line.appendChild(contentSpan);
 
             const meta = document.createElement('div');
-            meta.className = 'bubble-meta';
-            meta.innerHTML = `<span>${isUser ? 'Você' : 'Jarvis'}</span><span>${origin || ''}</span>`;
-            bubble.appendChild(meta);
+            meta.className = 'line-meta';
+            meta.innerText = new Date().toLocaleTimeString();
+            line.appendChild(meta);
 
-            chatBox.appendChild(bubble);
+            chatBox.appendChild(line);
             chatBox.scrollTop = chatBox.scrollHeight;
         }
 
         function updateOrAddJarvisBubble(text, origin) {
             if (!activeJarvisBubble) {
                 activeJarvisBubble = document.createElement('div');
-                activeJarvisBubble.className = 'chat-bubble jarvis generating';
+                activeJarvisBubble.className = 'chat-line jarvis generating';
                 
-                const contentSpan = document.createElement('span');
-                contentSpan.className = 'bubble-content';
+                const header = document.createElement('div');
+                header.className = 'line-header';
+                header.innerHTML = `<span>🤖 JARVIS</span> <span style="font-size: 10px; color: var(--text-muted); font-weight: normal;">[${origin || 'Sistema'}]</span>`;
+                activeJarvisBubble.appendChild(header);
+
+                const contentSpan = document.createElement('div');
+                contentSpan.className = 'line-content';
                 activeJarvisBubble.appendChild(contentSpan);
 
                 const meta = document.createElement('div');
-                meta.className = 'bubble-meta';
-                meta.innerHTML = `<span>Jarvis</span><span>${origin || ''}</span>`;
+                meta.className = 'line-meta';
+                meta.innerText = new Date().toLocaleTimeString();
                 activeJarvisBubble.appendChild(meta);
 
                 chatBox.appendChild(activeJarvisBubble);
             }
             
-            const contentSpan = activeJarvisBubble.querySelector('.bubble-content');
+            const contentSpan = activeJarvisBubble.querySelector('.line-content');
             if (contentSpan) {
                 contentSpan.innerText = text;
             }
@@ -818,10 +973,10 @@
 
         // Desenha a linha estática por padrão
         function drawFlatLine() {
-            canvasCtx.fillStyle = 'rgba(5, 6, 15, 0.7)';
+            canvasCtx.fillStyle = 'rgba(8, 3, 0, 0.7)';
             canvasCtx.fillRect(0, 0, canvas.width, canvas.height);
             canvasCtx.lineWidth = 2;
-            canvasCtx.strokeStyle = 'rgba(147, 51, 234, 0.2)';
+            canvasCtx.strokeStyle = 'rgba(255, 85, 0, 0.25)';
             canvasCtx.beginPath();
             canvasCtx.moveTo(0, canvas.height / 2);
             canvasCtx.lineTo(canvas.width, canvas.height / 2);
@@ -839,13 +994,13 @@
             requestAnimationFrame(drawWave);
             analyser.getByteTimeDomainData(dataArray);
 
-            canvasCtx.fillStyle = 'rgba(5, 6, 15, 0.5)';
+            canvasCtx.fillStyle = 'rgba(8, 3, 0, 0.5)';
             canvasCtx.fillRect(0, 0, canvas.width, canvas.height);
             
-            // Seleciona a cor do neon baseado no status
-            let strokeColor = 'rgba(6, 182, 212, 0.8)'; // Cyan quando desmutado e gravando
+            // Seleciona a cor do neon baseado no status (estilo Jarvis HUD)
+            let strokeColor = 'rgba(255, 170, 0, 0.85)'; // Âmbar quando desmutado e gravando
             if (isMuted) {
-                strokeColor = 'rgba(239, 68, 68, 0.5)'; // Vermelho quando mutado
+                strokeColor = 'rgba(255, 51, 51, 0.5)'; // Vermelho quando mutado
             }
 
             canvasCtx.lineWidth = 3;

@@ -399,6 +399,7 @@ async def run_stt_loop() -> None:
     ) -> None:
         web.llm_generating = True
         web.llm_task = asyncio.current_task()
+        web.llm_interrupted_by_voice = False
         log.info("PERF: Iniciando geração do LLM para o prompt: '{}' (Origem: {})", prompt_text, origin)
         console.print(f"🤖 [bold cyan]Jarvis [{origin}]:[/bold cyan] ", end="")
         
@@ -410,6 +411,8 @@ async def run_stt_loop() -> None:
         first_token_received = False
         try:
             async for token in llm.generate_stream(prompt_text, language=lang, ha_client=ha_client):
+                if llm._is_cancelled or web.llm_interrupted_by_voice:
+                    raise asyncio.CancelledError()
                 if not first_token_received:
                     log.info("PERF: Primeiro token verbal recebido do LLM.")
                     first_token_received = True
@@ -441,6 +444,9 @@ async def run_stt_loop() -> None:
                         clean_s = clean_s.strip()
                         if clean_s:
                             web.browser_recent_texts.append((time.time(), clean_s))
+
+            if llm._is_cancelled or web.llm_interrupted_by_voice:
+                raise asyncio.CancelledError()
 
             # Envia a última parte restante do buffer ao finalizar a geração
             remaining_sentence = sentence_buffer.strip()
@@ -490,6 +496,7 @@ async def run_stt_loop() -> None:
             sys.stdout.write("\n\n")
             sys.stdout.flush()
             web.llm_generating = False
+            web.llm_interrupted_by_voice = False
             await web.broadcast_chat_status("idle")
 
     # Vincula o callback para que web.py possa disparar respostas no mesmo fluxo
@@ -572,17 +579,21 @@ async def run_stt_loop() -> None:
                                     is_echo = False
                                     current_spoken = tts.current_spoken_text
                                     if current_spoken:
-                                        # 1. Correspondência direta de substring
-                                        if final_text_clean in current_spoken or current_spoken in final_text_clean:
-                                            is_echo = True
-                                        # 2. Correspondência de interseção de palavras
-                                        else:
-                                            words_trans = set(final_text_clean.split())
-                                            words_spok = set(current_spoken.split())
-                                            if words_trans and words_spok:
-                                                intersection = words_trans.intersection(words_spok)
-                                                if len(intersection) / len(words_trans) > 0.6:
-                                                    is_echo = True
+                                        # Bypass AEC if the user is clearly speaking a stop command (to handle barge-in while speaking)
+                                        has_stop_word = any(word in final_text_clean for word in ("pare", "parar", "cala a boca", "silêncio", "quieto", "stop", "shut up", "be quiet", "silence", "pera", "espera", "calma", "chega", "shh", "shush"))
+                                        
+                                        if not has_stop_word:
+                                            # 1. Correspondência direta de substring
+                                            if final_text_clean in current_spoken or current_spoken in final_text_clean:
+                                                is_echo = True
+                                            # 2. Correspondência de interseção de palavras
+                                            else:
+                                                words_trans = set(final_text_clean.split())
+                                                words_spok = set(current_spoken.split())
+                                                if words_trans and words_spok:
+                                                    intersection = words_trans.intersection(words_spok)
+                                                    if len(intersection) / len(words_trans) > 0.6:
+                                                        is_echo = True
 
                                     if is_echo:
                                         log.info("AEC: Transcrição de eco ignorada: '{}'", final_text)
@@ -744,6 +755,11 @@ async def run_stt_loop() -> None:
                     # Concatena o áudio acumulado até o momento
                     partial_audio = np.concatenate(audio_buffer, axis=0).flatten()
 
+                    # Slice the last 1.5 seconds of audio to avoid Whisper queue lag and keep transcriptions instant
+                    max_samples = int(settings.audio.sample_rate * 1.5)
+                    if len(partial_audio) > max_samples:
+                        partial_audio = partial_audio[-max_samples:]
+
                     # Transcreve em segundo plano
                     # Criamos uma task para não bloquear o loop de captura de áudio
                     async def transcribe_partial(audio_data: np.ndarray) -> None:
@@ -762,8 +778,26 @@ async def run_stt_loop() -> None:
                                             cleaned_text = cleaned_text.replace(p, "")
                                         cleaned_text = cleaned_text.strip()
 
-                                        stop_words = ("jarvis", "para", "pare", "parar", "cala a boca", "silêncio", "quieto", "stop", "shut up", "be quiet", "silence", "pera", "espera", "calma", "chega", "shh", "shush")
+                                        stop_words = ("pare", "parar", "cala a boca", "silêncio", "quieto", "stop", "shut up", "be quiet", "silence", "pera", "espera", "calma", "chega", "shh", "shush")
                                         if any(word in cleaned_text for word in stop_words):
+                                            # AEC check for terminal partial transcription
+                                            is_echo = False
+                                            current_spoken = tts.current_spoken_text
+                                            if current_spoken:
+                                                if cleaned_text in current_spoken or current_spoken in cleaned_text:
+                                                    is_echo = True
+                                                else:
+                                                    words_trans = set(cleaned_text.split())
+                                                    words_spok = set(current_spoken.split())
+                                                    if words_trans and words_spok:
+                                                        intersection = words_trans.intersection(words_spok)
+                                                        if len(intersection) / len(words_trans) > 0.6:
+                                                            is_echo = True
+                                            
+                                            if is_echo:
+                                                log.debug("AEC Parcial: Eco ignorado no terminal: '{}'", text)
+                                                return
+                                            
                                             if web.llm_task and not web.llm_task.done():
                                                 llm.interrupt()
                                                 web.llm_task.cancel()

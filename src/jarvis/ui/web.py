@@ -8,14 +8,13 @@ from __future__ import annotations
 
 import asyncio
 import json
-import sys
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
-from fastapi.responses import FileResponse
-from fastapi.staticfiles import StaticFiles
-from loguru import logger
+
 import numpy as np
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse
+from loguru import logger
 
 # Configurações do Jarvis
 from jarvis.config.settings import get_settings
@@ -152,7 +151,7 @@ async def post_ha_control(data: dict) -> dict:
     service = data.get("service")
     entity_id = data.get("entity_id")
     extra_data = data.get("data")
-    
+
     if not service or not entity_id:
         raise HTTPException(status_code=400, detail="Parâmetros inválidos.")
 
@@ -179,11 +178,24 @@ async def ws_chat_endpoint(websocket: WebSocket) -> None:
     # Loop para enviar atualizações de telemetria periódicas e ler mensagens textuais
     async def telemetry_loop():
         try:
+            import time
+            settings = get_settings()
             while websocket in active_chat_connections:
+                # Calcula se a escuta direta (conversa fluida) está ativa no momento
+                is_fluida = False
+                if tts_last_active_time > 0.0:
+                    is_fluida = (time.time() - tts_last_active_time) < (settings.audio.full_duplex_cooldown_ms / 1000)
+
+                is_browser_playing = time.time() < (browser_tts_end_time + 0.5)
+                is_jarvis_busy = llm_generating or is_browser_playing or (tts_engine and tts_engine._is_playing) or (tts_engine and not tts_engine._queue.empty())
+
+                conversa_fluida_active = is_fluida and not is_jarvis_busy
+
                 stats = get_gpu_stats()
                 await websocket.send_json({
                     "type": "telemetry",
-                    "data": stats
+                    "data": stats,
+                    "conversa_fluida": conversa_fluida_active
                 })
                 await asyncio.sleep(1.5)
         except Exception:
@@ -195,15 +207,15 @@ async def ws_chat_endpoint(websocket: WebSocket) -> None:
         while True:
             data_str = await websocket.receive_text()
             data = json.loads(data_str)
-            
+
             # Trata mensagens textuais enviadas pela interface web
             if data.get("type") == "message" and data.get("text"):
                 text = data["text"]
                 logger.info(f"WS Chat: Recebida pergunta textual do Navegador: '{text}'")
-                
+
                 # Imprime no terminal local indicando origem
                 print(f"\n🗣️  Você [Navegador] (texto): {text}")
-                
+
                 # Re-transmite a pergunta em broadcast para atualizar todos os chats
                 await broadcast_chat_message({
                     "type": "message",
@@ -211,7 +223,7 @@ async def ws_chat_endpoint(websocket: WebSocket) -> None:
                     "origin": "Navegador",
                     "text": text
                 })
-                
+
                 # Dispara a resposta do LLM em segundo plano
                 if generate_response_callback:
                     # Envia o áudio gerado pelo TTS de volta pelo WebSocket de áudio associado se ativo
@@ -243,24 +255,24 @@ async def ws_audio_endpoint(websocket: WebSocket) -> None:
     global llm_generating, llm_task, tts_last_active_time, llm_interrupted_by_voice, browser_tts_end_time, browser_recent_texts
     await websocket.accept()
     logger.info("WS Audio: Conexão de áudio estabelecida.")
-    
+
     # Detector VAD e Transcriber exclusivos para este fluxo de microfone móvel
     from jarvis.stt.vad import VADDetector
     vad = VADDetector()
-    
+
     sample_buffer = np.array([], dtype=np.float32)
     audio_buffer = []
     is_speaking = False
     silent_chunks = 0
-    
+
     settings = get_settings()
     max_silent_chunks = settings.audio.silence_threshold_ms // settings.audio.chunk_duration_ms
-    
+
     # Parâmetros de transcrição parcial
     last_partial_time = 0.0
     partial_interval_s = 0.35
     partial_in_progress = False
-    
+
     # Callback para capturar e enviar os pacotes do TTS de volta a esta conexão via loop asyncio
     loop = asyncio.get_running_loop()
     def send_tts_chunk(audio_float_array: np.ndarray, sample_rate: int = 22050) -> None:
@@ -290,48 +302,49 @@ async def ws_audio_endpoint(websocket: WebSocket) -> None:
             data = await websocket.receive_bytes()
             if not data:
                 break
-                
+
             chunk = np.frombuffer(data, dtype=np.float32)
             if len(chunk) == 0:
                 continue
-                
+
             sample_buffer = np.concatenate((sample_buffer, chunk))
-            
+
             # Alimenta o VAD com fatias de 30ms (480 samples)
             while len(sample_buffer) >= 480:
                 vad_chunk = sample_buffer[:480]
                 sample_buffer = sample_buffer[480:]
-                
+
                 speech_detected = vad.is_speech(vad_chunk)
-                
+
                 # Mantém tts_last_active_time atualizado se Jarvis estiver gerando ou tocando no navegador
                 import time
                 is_browser_playing = time.time() < (browser_tts_end_time + 0.5)
                 is_jarvis_busy = llm_generating or is_browser_playing or (tts_engine and tts_engine._is_playing) or (tts_engine and not tts_engine._queue.empty())
                 if is_jarvis_busy:
                     tts_last_active_time = time.time()
-                
+
                 if speech_detected:
                     if not is_speaking:
                         is_speaking = True
                         logger.info("WS Audio: Captação de voz activa iniciada.")
                         await broadcast_chat_status("recording")
+                        llm_interrupted_by_voice = False
                     silent_chunks = 0
                     audio_buffer.append(vad_chunk)
                 else:
                     if is_speaking:
                         audio_buffer.append(vad_chunk)
                         silent_chunks += 1
-                        
+
                         if silent_chunks >= max_silent_chunks:
                             is_speaking = False
                             logger.info("WS Audio: Silêncio de fim de frase detectado.")
                             await broadcast_chat_status("thinking")
-                            
+
                             full_audio = np.concatenate(audio_buffer, axis=0)
                             audio_buffer = []
                             silent_chunks = 0
-                            
+
                             # Executa a transcrição apenas se houver tamanho mínimo de voz (300ms)
                             if len(full_audio) > 16000 * 0.3 and transcriber_engine:
                                 res = await transcriber_engine.transcribe(full_audio)
@@ -343,16 +356,16 @@ async def ws_audio_endpoint(websocket: WebSocket) -> None:
                                         for p in [".", ",", "!", "?", "-", '"', "'"]:
                                             text_clean = text_clean.replace(p, "")
                                         text_clean = text_clean.strip()
-                                        
+
                                         # Define se Jarvis estava ativo (gerando, falando ou recém-interrompido)
                                         is_browser_playing = time.time() < (browser_tts_end_time + 0.5)
                                         was_jarvis_active = llm_generating or is_browser_playing or (tts_engine and tts_engine._is_playing) or (tts_engine and not tts_engine._queue.empty()) or llm_interrupted_by_voice
-                                        
+
                                         # AEC Check (Echo Cancellation)
                                         is_echo = False
                                         now = time.time()
                                         browser_recent_texts = [entry for entry in browser_recent_texts if now - entry[0] < 20.0]
-                                        
+
                                         for _, spoken_text in browser_recent_texts:
                                             if text_clean in spoken_text or spoken_text in text_clean:
                                                 is_echo = True
@@ -365,41 +378,43 @@ async def ws_audio_endpoint(websocket: WebSocket) -> None:
                                                     if len(intersection) / len(words_trans) > 0.6:
                                                         is_echo = True
                                                         break
-                                                            
+
                                         if is_echo:
                                             logger.info(f"WS Audio AEC: Eco do TTS ignorado no Navegador: '{text}'")
                                             await broadcast_chat_status("idle")
+                                            llm_interrupted_by_voice = False
                                             continue
-                                            
+
                                         # Regras de processamento (Wake Word / Stop Words / Conversa Fluida)
                                         stop_words = ("jarvis", "para", "pare", "parar", "cala a boca", "silêncio", "quieto", "stop", "shut up", "be quiet", "silence", "pera", "espera", "calma", "chega", "shh", "shush")
-                                        
+
                                         is_conversa_fluida = False
                                         if tts_last_active_time > 0.0:
                                             is_conversa_fluida = (time.time() - tts_last_active_time) < (settings.audio.full_duplex_cooldown_ms / 1000)
-                                            
+
                                         if was_jarvis_active:
                                             should_process = any(word in text.lower() for word in stop_words)
                                         elif is_conversa_fluida:
                                             should_process = True
                                         else:
                                             should_process = "jarvis" in text.lower()
-                                            
+
                                         if not should_process:
                                             logger.info(f"WS Audio: Frase ignorada (sem palavra de ativação/parada): '{text}'")
                                             await broadcast_chat_status("idle")
+                                            llm_interrupted_by_voice = False
                                             continue
-                                            
+
                                         # Limpa comando de "jarvis"
                                         cleaned_cmd = text.lower().replace("jarvis", "").strip()
                                         for p in [".", ",", "!", "?", "-"]:
                                             cleaned_cmd = cleaned_cmd.replace(p, "")
                                         cleaned_cmd = cleaned_cmd.strip()
-                                        
+
                                         is_stop_term = any(term in cleaned_cmd for term in ("pare", "parar", "cala a boca", "silêncio", "quieto", "stop", "shut up", "be quiet", "silence", "pera", "espera", "calma", "chega", "shh", "shush"))
                                         is_just_name = cleaned_cmd == "" or text.lower().strip() in ("jarvis", "jarvis.", "jarvis!", "jarvis?")
                                         is_stop_command = is_stop_term or (is_just_name and was_jarvis_active)
-                                        
+
                                         if is_stop_command:
                                             # Interrompe geração e áudio
                                             if llm_task and not llm_task.done():
@@ -410,7 +425,7 @@ async def ws_audio_endpoint(websocket: WebSocket) -> None:
                                             llm_interrupted_by_voice = True
                                             browser_tts_end_time = 0.0
                                             logger.info("WS Audio: Jarvis silenciado por comando de voz do Navegador.")
-                                            
+
                                             await broadcast_chat_message({
                                                 "type": "message",
                                                 "sender": "user",
@@ -436,10 +451,10 @@ async def ws_audio_endpoint(websocket: WebSocket) -> None:
                                                     tts_engine.stop()
                                                 browser_tts_end_time = 0.0
                                                 logger.info("WS Audio: Jarvis interrompido por nova pergunta do Navegador.")
-                                                
+
                                             # Imprime no terminal local
                                             print(f"\n🗣️  Você [Navegador] ({lang}): {text}")
-                                            
+
                                             # Notifica todas as janelas do chat
                                             await broadcast_chat_message({
                                                 "type": "message",
@@ -448,7 +463,7 @@ async def ws_audio_endpoint(websocket: WebSocket) -> None:
                                                 "text": text,
                                                 "lang": lang
                                             })
-                                            
+
                                             # Dispara inferência
                                             if generate_response_callback:
                                                 asyncio.create_task(
@@ -462,7 +477,10 @@ async def ws_audio_endpoint(websocket: WebSocket) -> None:
                                                 )
                             else:
                                 await broadcast_chat_status("idle")
-            
+
+                            # Safety reset of voice interruption flag at the end of final processing
+                            llm_interrupted_by_voice = False
+
             # 2. Transcrição Parcial (Real-time Feedback e Interrupção Imediata)
             if is_speaking and len(audio_buffer) > 0 and not partial_in_progress:
                 import time
@@ -470,10 +488,15 @@ async def ws_audio_endpoint(websocket: WebSocket) -> None:
                 if now - last_partial_time >= partial_interval_s:
                     last_partial_time = now
                     partial_audio = np.concatenate(audio_buffer, axis=0).flatten()
-                    
+
+                    # Slice the last 1.5 seconds of audio to avoid Whisper queue lag and keep transcriptions instant
+                    max_samples = int(16000 * 1.5)
+                    if len(partial_audio) > max_samples:
+                        partial_audio = partial_audio[-max_samples:]
+
                     async def transcribe_partial(audio_data: np.ndarray) -> None:
                         nonlocal partial_in_progress, audio_buffer, is_speaking, silent_chunks
-                        global llm_interrupted_by_voice, browser_tts_end_time
+                        global llm_interrupted_by_voice, browser_tts_end_time, browser_recent_texts
                         partial_in_progress = True
                         try:
                             if transcriber_engine:
@@ -485,32 +508,54 @@ async def ws_audio_endpoint(websocket: WebSocket) -> None:
                                         import time
                                         is_browser_playing = time.time() < (browser_tts_end_time + 0.5)
                                         was_jarvis_active = llm_generating or is_browser_playing or (tts_engine and tts_engine._is_playing) or (tts_engine and not tts_engine._queue.empty()) or llm_interrupted_by_voice
-                                        
+
                                         if was_jarvis_active:
-                                            cleaned_text = text.lower().strip()
+                                            text_clean = text.lower().strip()
                                             for p in [".", ",", "!", "?", "-"]:
-                                                cleaned_text = cleaned_text.replace(p, "")
-                                            cleaned_text = cleaned_text.strip()
-                                            
-                                            stop_words = ("jarvis", "para", "pare", "parar", "cala a boca", "silêncio", "quieto", "stop", "shut up", "be quiet", "silence", "pera", "espera", "calma", "chega", "shh", "shush")
-                                            if any(word in cleaned_text for word in stop_words):
+                                                text_clean = text_clean.replace(p, "")
+                                            text_clean = text_clean.strip()
+
+                                            stop_words = ("pare", "parar", "cala a boca", "silêncio", "quieto", "stop", "shut up", "be quiet", "silence", "pera", "espera", "calma", "chega", "shh", "shush")
+                                            if any(word in text_clean for word in stop_words):
+                                                # AEC check on partial transcription to ensure Jarvis's own voice doesn't trigger false self-interruption
+                                                is_echo = False
+                                                now = time.time()
+                                                browser_recent_texts = [entry for entry in browser_recent_texts if now - entry[0] < 20.0]
+
+                                                for _, spoken_text in browser_recent_texts:
+                                                    if text_clean in spoken_text or spoken_text in text_clean:
+                                                        is_echo = True
+                                                        break
+                                                    else:
+                                                        words_trans = set(text_clean.split())
+                                                        words_spok = set(spoken_text.split())
+                                                        if words_trans and words_spok:
+                                                            intersection = words_trans.intersection(words_spok)
+                                                            if len(intersection) / len(words_trans) > 0.6:
+                                                                is_echo = True
+                                                                break
+
+                                                if is_echo:
+                                                    logger.debug(f"WS Audio AEC Parcial: Eco do TTS ignorado: '{text}'")
+                                                    return
+
                                                 # Interrompe geração e áudio imediatamente!
                                                 if llm_task and not llm_task.done():
                                                     llm_engine.interrupt()
                                                     llm_task.cancel()
                                                 if tts_engine:
                                                     tts_engine.stop()
-                                                
+
                                                 llm_interrupted_by_voice = True
                                                 browser_tts_end_time = 0.0
-                                                
-                                                logger.info(f"WS Audio: Jarvis foi interrompido imediatamente ao detectar a palavra de parada '{cleaned_text}' via transcrição parcial.")
-                                                
+
+                                                logger.info(f"WS Audio: Jarvis foi interrompido imediatamente ao detectar a palavra de parada '{text_clean}' via transcrição parcial.")
+
                                                 # Limpa buffers de fala atuais
                                                 audio_buffer = []
                                                 is_speaking = False
                                                 silent_chunks = 0
-                                                
+
                                                 # Notifica todos os clientes
                                                 await broadcast_chat_status("idle")
                                                 await broadcast_chat_message({
@@ -529,9 +574,9 @@ async def ws_audio_endpoint(websocket: WebSocket) -> None:
                             logger.error(f"WS Audio: Erro na transcrição parcial: {pe}")
                         finally:
                             partial_in_progress = False
-                            
+
                     asyncio.create_task(transcribe_partial(partial_audio))
-                    
+
     except WebSocketDisconnect:
         logger.info("WS Audio: Conexão de áudio desconectada pelo cliente.")
     except Exception as e:

@@ -201,41 +201,7 @@ class LLMEngine:
                 context = "\n\n".join(context_parts)
                 log.info("RAG: Recobrados {} chunks relevantes do VectorStore.", len(context_parts))
                 
-            # 1b. Recupera trechos de código do RAG de Código Fonte
-            code_results = await self._vector_store.query_collection(
-                collection_name="code_snippets",
-                query_embeddings=[query_emb],
-                limit=2,
-            )
-            code_parts = []
-            for r in code_results:
-                if r.get("distance", 1.0) < 0.85:
-                    meta = r.get("metadata", {})
-                    source = meta.get("source", "Desconhecido")
-                    etype = meta.get("type", "Desconhecido")
-                    name = meta.get("name", "Desconhecido")
-                    start_l = meta.get("start_line", 0)
-                    end_l = meta.get("end_line", 0)
-                    
-                    code_content = r['document']
-                    if len(code_content) > 800:
-                        code_content = code_content[:800] + "\n... [Código truncado para economizar contexto]"
-                    
-                    code_parts.append(
-                        f"Arquivo: {source}\n"
-                        f"Tipo: {etype}\n"
-                        f"Nome: {name}\n"
-                        f"Linhas: {start_l}-{end_l}\n"
-                        f"Conteúdo:\n{code_content}"
-                    )
-            
-            if code_parts:
-                code_context = "\n\n========================================\n\n".join(code_parts)
-                if context:
-                    context += "\n\n=== CONTEXTO DE CÓDIGO FONTE DO PROJETO ===\n\n" + code_context
-                else:
-                    context = "=== CONTEXTO DE CÓDIGO FONTE DO PROJETO ===\n\n" + code_context
-                log.info("RAG: Recobrados {} snippets de código relevantes.", len(code_parts))
+
                 
             # 2. Recupera turnos de conversa anteriores em ordem cronológica (últimos 3 turnos)
             conv_parts = await self._vector_store.get_chronological_conversations(limit=3)
