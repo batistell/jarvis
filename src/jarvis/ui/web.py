@@ -345,8 +345,8 @@ async def ws_audio_endpoint(websocket: WebSocket) -> None:
                             audio_buffer = []
                             silent_chunks = 0
 
-                            # Executa a transcrição apenas se houver tamanho mínimo de voz (300ms)
-                            if len(full_audio) > 16000 * 0.3 and transcriber_engine:
+                            # Executa a transcrição apenas se houver tamanho mínimo de voz (800ms — abaixo disso o RTF do Whisper é > 1×)
+                            if len(full_audio) > 16000 * 0.8 and transcriber_engine:
                                 res = await transcriber_engine.transcribe(full_audio)
                                 if res:
                                     text, lang = res

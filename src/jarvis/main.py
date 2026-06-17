@@ -239,28 +239,40 @@ async def run_stt_loop() -> None:
     settings = get_settings()
 
     llm = LLMEngine()
-    console.print("[yellow]⏳ Carregando modelo LLM (Qwen 14B)...[/yellow]")
-    loop = asyncio.get_running_loop()
-    await loop.run_in_executor(llm._executor, llm.load_model)
-    console.print("[green]✅ Modelo LLM carregado e pronto![/green]")
-
-    console.print("[yellow]⏳ Carregando banco de dados e motor de busca (RAG)...[/yellow]")
-    await loop.run_in_executor(None, llm.pre_load_rag)
-    console.print("[green]✅ Motor de busca (RAG) carregado e pronto![/green]")
-
-    console.print("[yellow]⏳ Carregando componentes do STT...[/yellow]")
     mic = MicCapture()
     vad = VADDetector()
     transcriber = Transcriber()
-
-    # Força o carregamento do modelo Whisper no startup (no executor de GPU)
-    await loop.run_in_executor(transcriber._executor, transcriber.load_model)
-    console.print("[green]✅ Modelo Whisper carregado e pronto![/green]")
-
     tts = TTSEngine()
-    console.print("[yellow]⏳ Carregando sintetizador de voz (TTS)...[/yellow]")
-    await loop.run_in_executor(None, tts.load_model)
-    console.print("[green]✅ Sintetizador de voz (TTS) carregado e pronto![/green]\n")
+
+    loop = asyncio.get_running_loop()
+    console.print("[yellow]⏳ Carregando todos os modelos em paralelo...[/yellow]\n")
+
+    async def _load_gpu_models() -> None:
+        """LLM e STT sequencialmente no executor de GPU compartilhado."""
+        await loop.run_in_executor(llm._executor, llm.load_model)
+        console.print("[green]  ✅ LLM (Qwen 14B) carregado![/green]")
+        await loop.run_in_executor(transcriber._executor, transcriber.load_model)
+        console.print("[green]  ✅ Whisper STT carregado![/green]")
+
+    async def _load_rag() -> None:
+        """Embedding engine na CPU — em paralelo com os modelos de GPU."""
+        await loop.run_in_executor(None, llm.pre_load_rag)
+        console.print("[green]  ✅ RAG / Embedding (bge-m3) carregado![/green]")
+
+    async def _load_tts() -> None:
+        """Piper TTS na CPU — em paralelo com os modelos de GPU."""
+        await loop.run_in_executor(None, tts.load_model)
+        console.print("[green]  ✅ TTS (Piper) carregado![/green]")
+
+    # GPU: LLM → STT (sequencial no mesmo executor)
+    # CPU: Embedding + TTS (paralelo na thread pool padrão)
+    await asyncio.gather(
+        _load_gpu_models(),
+        _load_rag(),
+        _load_tts(),
+    )
+    console.print("\n[bold green]✅ Todos os modelos prontos![/bold green]\n")
+
 
     # Inicializa o cliente do Home Assistant
     ha_client = HomeAssistantClient()
@@ -558,8 +570,8 @@ async def run_stt_loop() -> None:
                         # Concatena todo o áudio acumulado
                         full_audio = np.concatenate(audio_buffer, axis=0).flatten()
 
-                        # Se o áudio for longo o suficiente, transcreve e comete (mínimo de 300ms para comandos rápidos)
-                        if len(full_audio) > settings.audio.sample_rate * 0.3:
+                        # Se o áudio for longo o suficiente, transcreve e comete (mínimo de 800ms para evitar RTF ruim em clips curtos)
+                        if len(full_audio) > settings.audio.sample_rate * 0.8:
                             log.info("PERF: Fim de fala detectado (VAD finalizado). Iniciando transcrição com Whisper STT...")
                             res = await transcriber.transcribe(full_audio)
                             if res:
@@ -697,20 +709,28 @@ async def run_stt_loop() -> None:
                                                     )
                                                 )
                                                 
-                                                # Cria um prompt instrutivo para o LLM apenas confirmar o sucesso verbalmente
-                                                service_desc = "ligar" if intent == "turn_on" else ("desligar" if intent == "turn_off" else "alternar")
-                                                spoken_prompt = (
-                                                    f"O usuário solicitou {service_desc} o dispositivo '{entity_obj['name']}' (ID: {entity_id}). "
-                                                    "Eu já executei a ação no Home Assistant com sucesso em segundo plano. "
-                                                    "Por favor, confirme verbalmente a conclusão dessa ação com uma frase curta, educada e elegante."
+                                                # Resposta canned imediata — pula LLM inteiramente (~1.1s economizados)
+                                                _action_map = {
+                                                    "turn_on":  ("Ligando",    "turned on"),
+                                                    "turn_off": ("Desligando", "turned off"),
+                                                    "toggle":   ("Alternando", "toggled"),
+                                                }
+                                                _verb_pt, _state_en = _action_map.get(intent, ("Executando", "done"))
+                                                if detected_lang == "en":
+                                                    canned_response = f"{entity_obj['name']} {_state_en}, Sir."
+                                                else:
+                                                    canned_response = f"{_verb_pt} {entity_obj['name']}, Senhor."
+
+                                                # Fala imediatamente via TTS sem passar pelo LLM
+                                                await asyncio.to_thread(tts.speak_stream, canned_response, detected_lang)
+                                                asyncio.create_task(
+                                                    web.broadcast_chat_message({
+                                                        "type": "message", "sender": "jarvis",
+                                                        "origin": "Terminal", "text": canned_response
+                                                    })
                                                 )
-                                                web.llm_task = asyncio.create_task(
-                                                    generate_response(
-                                                        prompt_text=spoken_prompt,
-                                                        lang=detected_lang,
-                                                        original_query=final_text,
-                                                        origin="Terminal"
-                                                    )
+                                                asyncio.create_task(
+                                                    llm.save_conversation_turn(final_text, canned_response)
                                                 )
                                             else:
                                                 # Fallback padrão: Envia para o LLM resolver via tool calling

@@ -168,9 +168,11 @@ class LLMEngine:
         if self._model is None:
             await loop.run_in_executor(self._executor, self.load_model)
 
-        # RAG Context Retrieval and Conversation History Retrieval
+        # RAG Context Retrieval — async pipeline com skip para comandos curtos
+        _RAG_SKIP_WORDS = 6  # prompts < N palavras pulam embedding (~177ms economizados)
         context = ""
         conv_context = ""
+        word_count = len(prompt.split())
         try:
             from jarvis.vectorstore.embeddings import EmbeddingEngine
             from jarvis.vectorstore.store import VectorStore
@@ -181,33 +183,39 @@ class LLMEngine:
             if not hasattr(self, "_vector_store"):
                 self._vector_store = VectorStore()
 
-            query_emb = self._embedding_engine.get_query_embedding(prompt)
-            
-            # 1. Recupera documentos permanentes da base de conhecimento (RAG)
-            results = await self._vector_store.query_collection(
-                collection_name="documents",
-                query_embeddings=[query_emb],
-                limit=2,
-            )
-            context_parts = []
-            for r in results:
-                if r.get("distance", 1.0) < 0.8:
-                    doc_content = r["document"]
-                    if len(doc_content) > 600:
-                        doc_content = doc_content[:600] + "\n... [Documento truncado]"
-                    context_parts.append(doc_content)
-            
-            if context_parts:
-                context = "\n\n".join(context_parts)
-                log.info("RAG: Recobrados {} chunks relevantes do VectorStore.", len(context_parts))
-                
+            if word_count < _RAG_SKIP_WORDS:
+                # Comando curto — pula embedding + busca documental (~177ms economizados)
+                log.debug("RAG: Pulado para prompt curto ({} palavras < {}).", word_count, _RAG_SKIP_WORDS)
+                conv_parts = await self._vector_store.get_chronological_conversations(limit=3)
+                if conv_parts:
+                    conv_context = "\n---\n".join(conv_parts)
+            else:
+                # Pipeline assíncrono: embedding e histórico de conversa em paralelo
+                query_emb, conv_parts = await asyncio.gather(
+                    asyncio.to_thread(self._embedding_engine.get_query_embedding, prompt),
+                    self._vector_store.get_chronological_conversations(limit=3),
+                )
 
-                
-            # 2. Recupera turnos de conversa anteriores em ordem cronológica (últimos 3 turnos)
-            conv_parts = await self._vector_store.get_chronological_conversations(limit=3)
-            if conv_parts:
-                conv_context = "\n---\n".join(conv_parts)
-                log.info("RAG: Recobrados {} turnos de conversa anteriores do VectorStore (ordem cronológica).", len(conv_parts))
+                if conv_parts:
+                    conv_context = "\n---\n".join(conv_parts)
+                    log.info("RAG: Recobrados {} turnos de conversa anteriores do VectorStore (ordem cronológica).", len(conv_parts))
+
+                # 1. Recupera documentos permanentes da base de conhecimento (RAG)
+                doc_results = await self._vector_store.query_collection(
+                    collection_name="documents",
+                    query_embeddings=[query_emb],
+                    limit=2,
+                )
+                context_parts = []
+                for r in doc_results:
+                    if r.get("distance", 1.0) < 0.8:
+                        doc_content = r["document"]
+                        if len(doc_content) > 600:
+                            doc_content = doc_content[:600] + "\n... [Documento truncado]"
+                        context_parts.append(doc_content)
+                if context_parts:
+                    context = "\n\n".join(context_parts)
+                    log.info("RAG: Recobrados {} chunks relevantes do VectorStore.", len(context_parts))
         except Exception as e:
             log.warning("RAG: Falha ao recuperar contexto do VectorStore: {}", e)
 
