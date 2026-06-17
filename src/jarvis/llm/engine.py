@@ -80,7 +80,54 @@ class LLMEngine:
             self._embedding_engine = EmbeddingEngine(device="cpu")
         if not hasattr(self, "_vector_store"):
             self._vector_store = VectorStore()
+        try:
+            self._vector_store.clear_collection("conversations")
+            log.info("RAG: Coleção de conversas temporárias limpa para uma nova execução.")
+        except Exception as e:
+            log.warning("RAG: Falha ao limpar coleção de conversas temporárias: {}", e)
         log.info("RAG pré-carregado com sucesso.")
+
+    async def save_conversation_turn(self, user_prompt: str, assistant_response: str) -> None:
+        """Salva a interação atual na coleção temporária de conversas do VectorStore."""
+        if not hasattr(self, "_embedding_engine") or not hasattr(self, "_vector_store"):
+            return
+        
+        # Limpa o texto da resposta removendo tags de chamadas de ferramentas se houver
+        clean_response = assistant_response
+        if "<tool_call>" in clean_response:
+            parts = clean_response.split("<tool_call>")
+            clean_response = parts[0].strip()
+            if len(parts) > 1 and "</tool_call>" in parts[1]:
+                subparts = parts[1].split("</tool_call>")
+                if len(subparts) > 1 and subparts[1]:
+                    clean_response += " " + subparts[1].strip()
+
+        clean_response = clean_response.strip()
+        if not clean_response:
+            return
+
+        turn_text = f"Usuário: {user_prompt}\nJarvis: {clean_response}"
+        
+        try:
+            # Gera embedding de forma síncrona para evitar problemas de threads com PyTorch no Windows
+            emb = self._embedding_engine.get_query_embedding(turn_text)
+            import time
+            turn_id = f"turn_{time.time_ns()}"
+            metadata = {
+                "user": user_prompt[:100],
+                "assistant": clean_response[:100],
+                "timestamp": time.time()
+            }
+            await self._vector_store.add_documents(
+                collection_name="conversations",
+                texts=[turn_text],
+                embeddings=[emb],
+                metadatas=[metadata],
+                ids=[turn_id]
+            )
+            log.info("RAG: Turno de conversa salvo no VectorStore.")
+        except Exception as e:
+            log.error("RAG: Falha ao salvar turno de conversa: {}", e)
 
     def interrupt(self) -> None:
         """Interrompe qualquer geração ativa do LLM."""
@@ -110,8 +157,9 @@ class LLMEngine:
         if self._model is None:
             await loop.run_in_executor(self._executor, self.load_model)
 
-        # RAG Context Retrieval
+        # RAG Context Retrieval and Conversation History Retrieval
         context = ""
+        conv_context = ""
         try:
             from jarvis.vectorstore.embeddings import EmbeddingEngine
             from jarvis.vectorstore.store import VectorStore
@@ -123,17 +171,23 @@ class LLMEngine:
                 self._vector_store = VectorStore()
 
             query_emb = self._embedding_engine.get_query_embedding(prompt)
+            
+            # 1. Recupera documentos permanentes da base de conhecimento (RAG)
             results = await self._vector_store.query_collection(
                 collection_name="documents",
                 query_embeddings=[query_emb],
                 limit=3,
             )
-
-            # Filtra chunks relevantes com distância inferior a 0.8
             context_parts = [r["document"] for r in results if r.get("distance", 1.0) < 0.8]
             if context_parts:
                 context = "\n\n".join(context_parts)
                 log.info("RAG: Recobrados {} chunks relevantes do VectorStore.", len(context_parts))
+                
+            # 2. Recupera turnos de conversa anteriores em ordem cronológica (últimos 5 turnos)
+            conv_parts = await self._vector_store.get_chronological_conversations(limit=5)
+            if conv_parts:
+                conv_context = "\n---\n".join(conv_parts)
+                log.info("RAG: Recobrados {} turnos de conversa anteriores do VectorStore (ordem cronológica).", len(conv_parts))
         except Exception as e:
             log.warning("RAG: Falha ao recuperar contexto do VectorStore: {}", e)
 
@@ -210,23 +264,35 @@ class LLMEngine:
         # Prepare messages
         if language == "en":
             user_content = prompt
+            if conv_context:
+                user_content = (
+                    "Context from previous turns in this session:\n"
+                    f"{conv_context}\n\n"
+                    f"{user_content}"
+                )
             if context:
                 user_content = (
                     "You have access to your Master's personal files and knowledge base. "
                     "Use the following relevant snippets to answer the Master's question. "
                     "Since these files belong to and describe your Master, you can assume that personal pronouns (like 'I', 'my', 'me') refer to the person described in these files.\n\n"
                     f"Relevant Context:\n{context}\n\n"
-                    f"Question: {prompt}"
+                    f"Question: {user_content}"
                 )
         else:
             user_content = prompt
+            if conv_context:
+                user_content = (
+                    "Contexto de turnos anteriores nesta sessão:\n"
+                    f"{conv_context}\n\n"
+                    f"{user_content}"
+                )
             if context:
                 user_content = (
                     "Você tem acesso aos arquivos pessoais e base de conhecimento do seu Mestre. "
                     "Use os seguintes trechos relevantes para responder à pergunta do Mestre. "
                     "Como estes arquivos pertencem e descrevem o seu Mestre, você pode assumir que pronomes pessoais (como 'eu', 'meu', 'me') se referem à pessoa descrita nestes arquivos.\n\n"
                     f"Contexto Relevante:\n{context}\n\n"
-                    f"Pergunta: {prompt}"
+                    f"Pergunta: {user_content}"
                 )
 
         messages = [

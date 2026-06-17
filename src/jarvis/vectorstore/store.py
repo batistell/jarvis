@@ -121,3 +121,50 @@ class VectorStore:
         logger.debug(f"Removendo {len(ids)} documentos da coleção '{collection_name}'...")
         await asyncio.to_thread(_sync_delete)
         logger.info(f"{len(ids)} documentos removidos da coleção '{collection_name}'.")
+
+    def clear_collection(self, name: str) -> None:
+        """Deleta e recria uma coleção para limpá-la de forma síncrona."""
+        if name not in self.collections:
+            raise ValueError(
+                f"Coleção '{name}' desconhecida. Coleções válidas: {list(self.collections.keys())}"
+            )
+        try:
+            self.client.delete_collection(name)
+        except Exception as e:
+            logger.warning(f"Erro ao deletar coleção '{name}': {e}")
+        self.collections[name] = self.client.get_or_create_collection(
+            name=name, metadata={"hnsw:space": "cosine"}
+        )
+        logger.info(f"Coleção '{name}' limpa e recriada com sucesso.")
+
+    async def get_chronological_conversations(self, limit: int = 5) -> list[str]:
+        """Recupera os turnos de conversa da sessão atual em ordem cronológica (mais antigos primeiro)."""
+        collection = self._get_collection("conversations")
+
+        def _sync_get() -> dict:
+            return collection.get()
+
+        try:
+            raw_results = await asyncio.to_thread(_sync_get)
+            if not raw_results or "ids" not in raw_results or not raw_results["ids"]:
+                return []
+
+            documents = raw_results.get("documents") or []
+            metadatas = raw_results.get("metadatas") or []
+
+            # Associa cada documento com seu timestamp correspondente
+            turns = []
+            for doc, meta in zip(documents, metadatas):
+                ts = meta.get("timestamp", 0.0) if meta else 0.0
+                turns.append((ts, doc))
+
+            # Ordena por timestamp crescente (mais antigo primeiro)
+            turns.sort(key=lambda x: x[0])
+
+            # Pega os últimos 'limit' turnos
+            recent_turns = turns[-limit:]
+
+            return [doc for ts, doc in recent_turns]
+        except Exception as e:
+            logger.error(f"Erro ao recuperar conversas cronológicas: {e}")
+            return []

@@ -285,7 +285,7 @@ async def run_stt_loop() -> None:
     llm_interrupted_by_voice = False
     partial_in_progress = False
 
-    async def generate_response(prompt_text: str, lang: str) -> None:
+    async def generate_response(prompt_text: str, lang: str, original_query: str | None = None) -> None:
         nonlocal llm_generating
         llm_generating = True
         log.info("PERF: Iniciando geração do LLM para o prompt: '{}'", prompt_text)
@@ -314,6 +314,15 @@ async def run_stt_loop() -> None:
                 tts.speak_stream(remaining_sentence, lang)
             
             log.info("PERF: Geração do LLM concluída com sucesso.")
+            
+            # Salva o turno da conversa no banco de dados temporário
+            full_response = "".join(full_response_parts)
+            user_msg = original_query if original_query is not None else prompt_text
+            cleaned_user_msg = user_msg
+            # Remove "jarvis" do início se houver para deixar o contexto de histórico mais limpo
+            if cleaned_user_msg.lower().strip().startswith("jarvis"):
+                cleaned_user_msg = cleaned_user_msg.strip()[6:].strip(", ").strip()
+            asyncio.create_task(llm.save_conversation_turn(cleaned_user_msg, full_response))
         except asyncio.CancelledError:
             # Geração foi cancelada por interrupção de fala
             log.info("PERF: Geração do LLM cancelada por interrupção de voz.")
@@ -444,10 +453,22 @@ async def run_stt_loop() -> None:
                                                     "Eu já executei a ação no Home Assistant com sucesso em segundo plano. "
                                                     "Por favor, confirme verbalmente a conclusão dessa ação com uma frase curta, educada e elegante."
                                                 )
-                                                llm_task = asyncio.create_task(generate_response(spoken_prompt, detected_lang))
+                                                llm_task = asyncio.create_task(
+                                                    generate_response(
+                                                        prompt_text=spoken_prompt,
+                                                        lang=detected_lang,
+                                                        original_query=final_text
+                                                    )
+                                                )
                                             else:
                                                 # Fallback padrão: Envia para o LLM resolver via tool calling
-                                                llm_task = asyncio.create_task(generate_response(final_text, detected_lang))
+                                                llm_task = asyncio.create_task(
+                                                    generate_response(
+                                                        prompt_text=final_text,
+                                                        lang=detected_lang,
+                                                        original_query=final_text
+                                                    )
+                                                )
                                     else:
                                         if not partial_newline_printed:
                                             sys.stdout.write("\n")
