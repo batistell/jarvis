@@ -1,13 +1,15 @@
 import time
 import pytest
 import asyncio
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
-# Mock asyncio.get_running_loop antes de importar MicCapture
-# para evitar RuntimeError: no running event loop durante a inicialização do teste
 mock_loop = MagicMock()
 mock_loop.call_soon_threadsafe = lambda f, *a: f(*a)
-asyncio.get_running_loop = lambda: mock_loop
+
+@pytest.fixture(autouse=True)
+def patch_running_loop():
+    with patch("asyncio.get_running_loop", return_value=mock_loop):
+        yield
 
 from jarvis.stt.mic_capture import MicCapture
 

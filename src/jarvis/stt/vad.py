@@ -59,8 +59,8 @@ class VADDetector:
             mean_noise = np.mean(self._calibration_data)
             std_noise = np.std(self._calibration_data)
             self._noise_floor = float(mean_noise)
-            # Threshold = ruído médio + 3 * desvio padrão (mínimo de 0.01)
-            self.rms_threshold = max(float(mean_noise + 3 * std_noise), 0.01)
+            # Threshold = ruído médio + 3 * desvio padrão (mínimo de 0.01, máximo de 0.035)
+            self.rms_threshold = min(max(float(mean_noise + 3 * std_noise), 0.01), 0.035)
             self._calibrated = True
             log.info(
                 "VAD Calibrado: Noise Floor={:.5f}, RMS Threshold={:.5f}",

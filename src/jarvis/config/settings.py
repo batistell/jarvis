@@ -181,8 +181,11 @@ class WebSettings(BaseSettings):
 
     model_config = SettingsConfigDict(env_prefix="JARVIS_WEB_")
 
-    host: str = "127.0.0.1"
+    host: str = "0.0.0.0"
     port: int = 8000
+    ssl_enabled: bool = True
+    ssl_cert_path: str = "data/certs/cert.pem"
+    ssl_key_path: str = "data/certs/key.pem"
 
 
 class HomeAssistantSettings(BaseSettings):

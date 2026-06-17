@@ -107,7 +107,7 @@ class TTSEngine:
                 self._queue.task_done()
                 break
 
-            text, lang = item
+            text, lang, on_audio_chunk = item
             try:
                 self._is_playing = True
                 
@@ -126,8 +126,20 @@ class TTSEngine:
                 for chunk in voice.synthesize(text, config):
                     if not self._is_playing or self._stop_event.is_set():
                         break
-                    sd.play(chunk.audio_float_array, chunk.sample_rate)
-                    sd.wait()
+                    if on_audio_chunk is not None:
+                        try:
+                            # Tenta passar o sample_rate e o texto da frase
+                            on_audio_chunk(chunk.audio_float_array, chunk.sample_rate, text)
+                        except TypeError:
+                            try:
+                                # Fallback para dois argumentos (sem o texto)
+                                on_audio_chunk(chunk.audio_float_array, chunk.sample_rate)
+                            except TypeError:
+                                # Fallback para um argumento
+                                on_audio_chunk(chunk.audio_float_array)
+                    else:
+                        sd.play(chunk.audio_float_array, chunk.sample_rate)
+                        sd.wait()
             except Exception as e:
                 logger.error(f"TTS: Erro na síntese/reprodução: {e}")
             finally:
@@ -141,7 +153,7 @@ class TTSEngine:
         """Legado: adiciona o texto inteiro na fila padrão."""
         self.speak_stream(text, "pt")
 
-    def speak_stream(self, text: str, lang: str = "pt") -> None:
+    def speak_stream(self, text: str, lang: str = "pt", on_audio_chunk: callable | None = None) -> None:
         """Gera e reproduz a fala do texto fornecido de forma síncrona/fila.
 
         Deve ser executado fora da thread de loop principal do asyncio.
@@ -150,7 +162,7 @@ class TTSEngine:
             return
 
         self.start_worker()
-        self._queue.put((text, lang))
+        self._queue.put((text, lang, on_audio_chunk))
 
     def stop(self) -> None:
         """Interrompe qualquer reprodução ou geração de áudio atual e limpa a fila."""

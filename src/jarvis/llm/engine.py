@@ -28,6 +28,7 @@ class LLMEngine:
         # Usa o executor compartilhado de thread única para GPU
         self._executor = get_gpu_executor()
         self._is_cancelled = False
+        self._lock: asyncio.Lock | None = None
 
     def load_model(self) -> None:
         """Carrega o modelo na memória de forma síncrona.
@@ -106,6 +107,12 @@ class LLMEngine:
         if not clean_response:
             return
 
+        # Trunca mensagens muito longas no histórico para evitar estourar o limite de tokens da janela de contexto
+        if len(user_prompt) > 150:
+            user_prompt = user_prompt[:150] + "... [pergunta truncada]"
+        if len(clean_response) > 350:
+            clean_response = clean_response[:350] + "... [resposta truncada]"
+
         turn_text = f"Usuário: {user_prompt}\nJarvis: {clean_response}"
         
         try:
@@ -140,16 +147,20 @@ class LLMEngine:
         language: str = "pt",
         ha_client: HomeAssistantClient | None = None,
     ) -> AsyncIterator[str]:
-        """Gera resposta do LLM em streaming assíncrono.
+        """Gera resposta do LLM em streaming assíncrono garantindo exclusão mútua de acesso à GPU/Sampler."""
+        if self._lock is None:
+            self._lock = asyncio.Lock()
 
-        Args:
-            prompt: Pergunta ou instrução do usuário.
-            language: Idioma da resposta ("pt" ou "en").
-            ha_client: Cliente opcional do Home Assistant para execução de chamadas.
+        async with self._lock:
+            async for token in self._generate_stream_inner(prompt, language, ha_client):
+                yield token
 
-        Yields:
-            Fragmentos de texto (tokens) conforme gerados pelo modelo.
-        """
+    async def _generate_stream_inner(
+        self,
+        prompt: str,
+        language: str = "pt",
+        ha_client: HomeAssistantClient | None = None,
+    ) -> AsyncIterator[str]:
         self._is_cancelled = False
         loop = asyncio.get_running_loop()
 
@@ -176,15 +187,58 @@ class LLMEngine:
             results = await self._vector_store.query_collection(
                 collection_name="documents",
                 query_embeddings=[query_emb],
-                limit=3,
+                limit=2,
             )
-            context_parts = [r["document"] for r in results if r.get("distance", 1.0) < 0.8]
+            context_parts = []
+            for r in results:
+                if r.get("distance", 1.0) < 0.8:
+                    doc_content = r["document"]
+                    if len(doc_content) > 600:
+                        doc_content = doc_content[:600] + "\n... [Documento truncado]"
+                    context_parts.append(doc_content)
+            
             if context_parts:
                 context = "\n\n".join(context_parts)
                 log.info("RAG: Recobrados {} chunks relevantes do VectorStore.", len(context_parts))
                 
-            # 2. Recupera turnos de conversa anteriores em ordem cronológica (últimos 5 turnos)
-            conv_parts = await self._vector_store.get_chronological_conversations(limit=5)
+            # 1b. Recupera trechos de código do RAG de Código Fonte
+            code_results = await self._vector_store.query_collection(
+                collection_name="code_snippets",
+                query_embeddings=[query_emb],
+                limit=2,
+            )
+            code_parts = []
+            for r in code_results:
+                if r.get("distance", 1.0) < 0.85:
+                    meta = r.get("metadata", {})
+                    source = meta.get("source", "Desconhecido")
+                    etype = meta.get("type", "Desconhecido")
+                    name = meta.get("name", "Desconhecido")
+                    start_l = meta.get("start_line", 0)
+                    end_l = meta.get("end_line", 0)
+                    
+                    code_content = r['document']
+                    if len(code_content) > 800:
+                        code_content = code_content[:800] + "\n... [Código truncado para economizar contexto]"
+                    
+                    code_parts.append(
+                        f"Arquivo: {source}\n"
+                        f"Tipo: {etype}\n"
+                        f"Nome: {name}\n"
+                        f"Linhas: {start_l}-{end_l}\n"
+                        f"Conteúdo:\n{code_content}"
+                    )
+            
+            if code_parts:
+                code_context = "\n\n========================================\n\n".join(code_parts)
+                if context:
+                    context += "\n\n=== CONTEXTO DE CÓDIGO FONTE DO PROJETO ===\n\n" + code_context
+                else:
+                    context = "=== CONTEXTO DE CÓDIGO FONTE DO PROJETO ===\n\n" + code_context
+                log.info("RAG: Recobrados {} snippets de código relevantes.", len(code_parts))
+                
+            # 2. Recupera turnos de conversa anteriores em ordem cronológica (últimos 3 turnos)
+            conv_parts = await self._vector_store.get_chronological_conversations(limit=3)
             if conv_parts:
                 conv_context = "\n---\n".join(conv_parts)
                 log.info("RAG: Recobrados {} turnos de conversa anteriores do VectorStore (ordem cronológica).", len(conv_parts))

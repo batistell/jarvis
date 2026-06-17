@@ -1,0 +1,1166 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Jarvis — Web Dashboard</title>
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&family=Outfit:wght@400;600;800&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-color: #05060f;
+            --card-bg: rgba(20, 22, 45, 0.45);
+            --border-color: rgba(147, 51, 234, 0.2);
+            --primary: #9333ea;
+            --primary-glow: rgba(147, 51, 234, 0.4);
+            --secondary: #06b6d4;
+            --secondary-glow: rgba(6, 182, 212, 0.4);
+            --text-color: #f3f4f6;
+            --text-muted: #9ca3af;
+            --accent-green: #10b981;
+            --accent-red: #ef4444;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow-x: hidden;
+            background-image: 
+                radial-gradient(circle at 10% 20%, rgba(147, 51, 234, 0.08) 0%, transparent 40%),
+                radial-gradient(circle at 90% 80%, rgba(6, 182, 212, 0.08) 0%, transparent 40%);
+        }
+
+        header {
+            padding: 20px 40px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid var(--border-color);
+            backdrop-filter: blur(12px);
+            background: rgba(5, 6, 15, 0.7);
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        .logo-container {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .logo-icon {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, var(--primary), var(--secondary));
+            box-shadow: 0 0 15px var(--primary-glow);
+            position: relative;
+            animation: pulse-glow 2s infinite alternate;
+        }
+
+        @keyframes pulse-glow {
+            from { box-shadow: 0 0 10px var(--primary-glow); }
+            to { box-shadow: 0 0 22px var(--primary-glow), 0 0 10px var(--secondary-glow); }
+        }
+
+        h1 {
+            font-family: 'Outfit', sans-serif;
+            font-size: 24px;
+            font-weight: 800;
+            background: linear-gradient(to right, #fff, #a78bfa);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .status-badge {
+            background: rgba(16, 185, 129, 0.1);
+            border: 1px solid rgba(16, 185, 129, 0.3);
+            color: var(--accent-green);
+            padding: 6px 14px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background-color: var(--accent-green);
+            box-shadow: 0 0 8px var(--accent-green);
+            animation: blink 1.5s infinite;
+        }
+
+        @keyframes blink {
+            0%, 100% { opacity: 0.4; }
+            50% { opacity: 1; }
+        }
+
+        .dashboard-container {
+            flex: 1;
+            padding: 30px 40px;
+            display: grid;
+            grid-template-columns: 1fr 350px;
+            gap: 30px;
+            max-width: 1600px;
+            width: 100%;
+            margin: 0 auto;
+        }
+
+        /* Coluna Esquerda: Chat & Waveform */
+        .main-panel {
+            display: flex;
+            flex-direction: column;
+            gap: 25px;
+            min-height: 0;
+        }
+
+        .chat-card {
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            backdrop-filter: blur(16px);
+            padding: 24px;
+            display: flex;
+            flex-direction: column;
+            height: 550px;
+            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+        }
+
+        .chat-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 12px;
+        }
+
+        .chat-title {
+            font-family: 'Outfit', sans-serif;
+            font-size: 18px;
+            font-weight: 600;
+        }
+
+        .chat-history {
+            flex: 1;
+            overflow-y: auto;
+            padding-right: 8px;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+            min-height: 0;
+        }
+
+        /* Custom Scrollbar */
+        .chat-history::-webkit-scrollbar {
+            width: 6px;
+        }
+        .chat-history::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        .chat-history::-webkit-scrollbar-thumb {
+            background: rgba(147, 51, 234, 0.3);
+            border-radius: 10px;
+        }
+
+        .chat-bubble {
+            max-width: 75%;
+            padding: 14px 18px;
+            border-radius: 16px;
+            line-height: 1.5;
+            font-size: 14px;
+            position: relative;
+            animation: fade-in-up 0.3s ease-out;
+        }
+
+        @keyframes fade-in-up {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .chat-bubble.user {
+            background: linear-gradient(135deg, rgba(6, 182, 212, 0.2), rgba(6, 182, 212, 0.05));
+            border: 1px solid rgba(6, 182, 212, 0.25);
+            align-self: flex-end;
+            border-bottom-right-radius: 4px;
+        }
+
+        .chat-bubble.jarvis {
+            background: linear-gradient(135deg, rgba(147, 51, 234, 0.2), rgba(147, 51, 234, 0.05));
+            border: 1px solid rgba(147, 51, 234, 0.25);
+            align-self: flex-start;
+            border-bottom-left-radius: 4px;
+        }
+
+        .bubble-meta {
+            font-size: 10px;
+            color: var(--text-muted);
+            margin-top: 6px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .chat-input-container {
+            margin-top: 16px;
+            display: flex;
+            gap: 12px;
+        }
+
+        .chat-input {
+            flex: 1;
+            background: rgba(5, 6, 15, 0.6);
+            border: 1px solid var(--border-color);
+            border-radius: 10px;
+            padding: 12px 18px;
+            color: var(--text-color);
+            font-size: 14px;
+            outline: none;
+            transition: border-color 0.3s;
+        }
+
+        .chat-input:focus {
+            border-color: var(--secondary);
+            box-shadow: 0 0 8px rgba(6, 182, 212, 0.2);
+        }
+
+        .send-btn {
+            background: linear-gradient(135deg, var(--primary), var(--secondary));
+            border: none;
+            border-radius: 10px;
+            color: #fff;
+            padding: 0 20px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: opacity 0.3s, transform 0.2s;
+        }
+
+        .send-btn:hover {
+            opacity: 0.9;
+        }
+
+        .send-btn:active {
+            transform: scale(0.97);
+        }
+
+        /* Waveform Wave */
+        .audio-control-card {
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 16px;
+        }
+
+        .waveform-canvas {
+            width: 100%;
+            height: 90px;
+            background: rgba(5, 6, 15, 0.7);
+            border-radius: 10px;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        .audio-buttons {
+            display: flex;
+            gap: 15px;
+            align-items: center;
+        }
+
+        .control-btn {
+            background: rgba(147, 51, 234, 0.1);
+            border: 1px solid var(--primary);
+            color: var(--text-color);
+            padding: 10px 24px;
+            border-radius: 30px;
+            font-weight: 600;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            transition: all 0.3s;
+        }
+
+        .control-btn:hover {
+            background: var(--primary);
+            box-shadow: 0 0 15px var(--primary-glow);
+        }
+
+        .control-btn.active-record {
+            background: var(--accent-red);
+            border-color: var(--accent-red);
+            box-shadow: 0 0 15px rgba(239, 68, 68, 0.4);
+        }
+
+        .control-btn.muted {
+            background: rgba(239, 68, 68, 0.2);
+            border-color: var(--accent-red);
+            color: var(--accent-red);
+        }
+
+        .control-btn.muted:hover {
+            background: var(--accent-red);
+            color: #fff;
+        }
+
+        /* Coluna Direita: Telemetria & Home Assistant */
+        .sidebar {
+            display: flex;
+            flex-direction: column;
+            gap: 25px;
+        }
+
+        .sidebar-card {
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            backdrop-filter: blur(16px);
+            padding: 20px;
+            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+        }
+
+        .card-header-sidebar {
+            font-family: 'Outfit', sans-serif;
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 16px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        /* Telemetria GPU */
+        .telemetry-grid {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+
+        .stat-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .stat-label {
+            font-size: 13px;
+            color: var(--text-muted);
+        }
+
+        .stat-value {
+            font-size: 14px;
+            font-weight: 600;
+        }
+
+        .progress-bar-container {
+            width: 100%;
+            height: 6px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 3px;
+            overflow: hidden;
+            margin-top: 4px;
+        }
+
+        .progress-bar-fill {
+            height: 100%;
+            background: linear-gradient(to right, var(--primary), var(--secondary));
+            border-radius: 3px;
+            width: 0%;
+            transition: width 0.5s ease-out;
+        }
+
+        .gauge-container {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+            margin-top: 10px;
+        }
+
+        .mini-gauge {
+            background: rgba(5, 6, 15, 0.4);
+            border: 1px solid rgba(255, 255, 255, 0.03);
+            border-radius: 10px;
+            padding: 12px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .gauge-val {
+            font-size: 20px;
+            font-family: 'Outfit', sans-serif;
+            font-weight: 700;
+            color: var(--secondary);
+        }
+
+        /* Home Assistant Card */
+        .ha-grid {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 10px;
+            max-height: 250px;
+            overflow-y: auto;
+            padding-right: 4px;
+        }
+
+        .ha-device-item {
+            background: rgba(5, 6, 15, 0.4);
+            border: 1px solid rgba(255, 255, 255, 0.03);
+            border-radius: 10px;
+            padding: 10px 14px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            transition: border-color 0.3s;
+        }
+
+        .ha-device-item:hover {
+            border-color: rgba(6, 182, 212, 0.15);
+        }
+
+        .device-info {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .device-name {
+            font-size: 13px;
+            font-weight: 600;
+        }
+
+        .device-entity {
+            font-size: 10px;
+            color: var(--text-muted);
+            margin-top: 2px;
+        }
+
+        /* Switch Toggle */
+        .toggle-switch {
+            position: relative;
+            display: inline-block;
+            width: 36px;
+            height: 20px;
+        }
+
+        .toggle-switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+
+        .toggle-slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background-color: rgba(255, 255, 255, 0.1);
+            transition: .3s;
+            border-radius: 34px;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        .toggle-slider:before {
+            position: absolute;
+            content: "";
+            height: 12px;
+            width: 12px;
+            left: 3px;
+            bottom: 3px;
+            background-color: var(--text-color);
+            transition: .3s;
+            border-radius: 50%;
+        }
+
+        input:checked + .toggle-slider {
+            background-color: var(--secondary);
+            box-shadow: 0 0 8px var(--secondary-glow);
+        }
+
+        input:checked + .toggle-slider:before {
+            transform: translateX(16px);
+        }
+
+        @media (max-width: 900px) {
+            .dashboard-container {
+                grid-template-columns: 1fr;
+                padding: 15px;
+            }
+            header {
+                padding: 15px 20px;
+            }
+        }
+    </style>
+</head>
+<body>
+
+    <header>
+        <div class="logo-container">
+            <div class="logo-icon"></div>
+            <h1>JARVIS</h1>
+        </div>
+        <div class="status-badge">
+            <div class="status-dot"></div>
+            <span id="jarvis-status-txt">ONLINE</span>
+        </div>
+    </header>
+
+    <div class="dashboard-container">
+        <!-- Esquerda: Conversa e Ondas de Áudio -->
+        <main class="main-panel">
+            <div class="chat-card">
+                <div class="chat-header">
+                    <div class="chat-title">Histórico de Conversação</div>
+                    <div style="font-size: 11px; color: var(--text-muted);" id="connection-status">Desconectado</div>
+                </div>
+                <div class="chat-history" id="chat-box">
+                    <div class="chat-bubble jarvis">
+                        Olá, Senhor. Estou à sua disposição.
+                        <div class="bubble-meta">
+                            <span>Jarvis</span>
+                            <span>Sistema</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="chat-input-container">
+                    <input type="text" class="chat-input" id="chat-input-text" placeholder="Digite uma instrução para o Jarvis...">
+                    <button class="send-btn" id="send-btn-action">Enviar</button>
+                </div>
+            </div>
+
+            <div class="audio-control-card">
+                <canvas class="waveform-canvas" id="canvas-wave"></canvas>
+                <div class="audio-buttons">
+                    <button class="control-btn" id="mic-connect-btn">
+                        <svg width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M5 3a3 3 0 0 1 6 0v5a3 3 0 0 1-6 0V3z"/><path d="M3.5 6.5A.5.5 0 0 1 4 7a4 4 0 0 0 8 0 .5.5 0 0 1 1 0 5 5 0 0 1-4.5 4.975V15h3a.5.5 0 0 1 0 1h-7a.5.5 0 0 1 0-1h3v-3.025A5 5 0 0 1 3 7a.5.5 0 0 1 .5-.5z"/></svg>
+                        <span>Iniciar Microfone</span>
+                    </button>
+                    <button class="control-btn muted" id="mute-btn" style="display: none;">
+                        <svg width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M6.717 3.55A.5.5 0 0 1 7 4v8a.5.5 0 0 1-.812.39L3.825 10.5H1.5A.5.5 0 0 1 1 10V6a.5.5 0 0 1 .5-.5h2.325l2.363-1.89a.5.5 0 0 1 .529-.06zM6 4.364 4.012 5.954A.5.5 0 0 1 3.687 6H1.5v4h2.187a.5.5 0 0 1 .325.13L6 11.636V4.364zM10.146 5.646a.5.5 0 0 1 .708 0l3 3a.5.5 0 0 1-.708.708l-3-3a.5.5 0 0 1 0-.708z"/><path d="M10.146 9.354a.5.5 0 0 1 0-.708l3-3a.5.5 0 0 1 .708.708l-3 3a.5.5 0 0 1-.708 0z"/></svg>
+                        <span>Mudar Som (Mute)</span>
+                    </button>
+                </div>
+            </div>
+        </main>
+
+        <!-- Direita: Telemetria e Widgets HA -->
+        <aside class="sidebar">
+            <!-- Telemetria GPU -->
+            <div class="sidebar-card">
+                <div class="card-header-sidebar">
+                    <svg width="16" height="16" fill="currentColor" viewBox="0 0 16 16" style="color: var(--secondary);"><path d="M11 2a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1h-2a1 1 0 0 1-1-1V2zM0 8a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H1a1 1 0 0 1-1-1V8zm5-4a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4z"/></svg>
+                    RTX 3060 Telemetria
+                </div>
+                <div class="telemetry-grid">
+                    <div>
+                        <div class="stat-row">
+                            <span class="stat-label">Uso de VRAM</span>
+                            <span class="stat-value" id="gpu-vram-text">0.0 MB / 0.0 MB</span>
+                        </div>
+                        <div class="progress-bar-container">
+                            <div class="progress-bar-fill" id="gpu-vram-bar"></div>
+                        </div>
+                    </div>
+                    <div class="gauge-container">
+                        <div class="mini-gauge">
+                            <span class="stat-label">Temperatura</span>
+                            <span class="gauge-val" id="gpu-temp-text">0°C</span>
+                        </div>
+                        <div class="mini-gauge">
+                            <span class="stat-label">Carga CUDA</span>
+                            <span class="gauge-val" id="gpu-load-text">0%</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Home Assistant Smart Cards -->
+            <div class="sidebar-card">
+                <div class="card-header-sidebar">
+                    <svg width="16" height="16" fill="currentColor" viewBox="0 0 16 16" style="color: var(--primary);"><path d="M2 1a1 1 0 0 0-1 1v10.07a1 1 0 0 0 .158.538l2.5 4A1 1 0 0 0 4.5 17h7a1 1 0 0 0 .842-.462l2.5-4a1 1 0 0 0 .158-.538V2a1 1 0 0 0-1-1H2zm1 2h10v3H3V3zm10 4v3H3V7h10zm0 4v1.07l-1.917 3.067a.5.5 0 0 1-.42.231H4.837a.5.5 0 0 1-.42-.23L2.5 11.07V11h10.5z"/></svg>
+                    Home Assistant
+                </div>
+                <div class="ha-grid" id="ha-devices-list">
+                    <div style="font-size: 12px; color: var(--text-muted); text-align: center; width: 100%; padding: 15px;">
+                        Carregando automações...
+                    </div>
+                </div>
+            </div>
+        </aside>
+    </div>
+
+    <script>
+        // Configura conexões WebSockets usando a porta e endereço corretos (HTTPS/WSS automático)
+        const isSecure = window.location.protocol === 'https:';
+        const wsProtocol = isSecure ? 'wss://' : 'ws://';
+        const wsHost = window.location.host;
+        
+        const chatSocketUrl = `${wsProtocol}${wsHost}/ws/chat`;
+        const audioSocketUrl = `${wsProtocol}${wsHost}/ws/audio`;
+
+        let chatSocket = null;
+        let audioSocket = null;
+
+        const chatBox = document.getElementById('chat-box');
+        const chatInput = document.getElementById('chat-input-text');
+        const sendBtn = document.getElementById('send-btn-action');
+        const connStatus = document.getElementById('connection-status');
+        
+        // Elementos de Telemetria
+        const vramText = document.getElementById('gpu-vram-text');
+        const vramBar = document.getElementById('gpu-vram-bar');
+        const tempText = document.getElementById('gpu-temp-text');
+        const loadText = document.getElementById('gpu-load-text');
+        
+        // Elementos de Status
+        const statusDot = document.querySelector('.status-dot');
+        const statusTxt = document.getElementById('jarvis-status-txt');
+
+        let activeJarvisBubble = null;
+
+        // Inicializa Websocket de Chat/Status
+        function initChatSocket() {
+            chatSocket = new WebSocket(chatSocketUrl);
+            chatSocket.onopen = () => {
+                connStatus.innerText = 'Conectado';
+                connStatus.style.color = 'var(--secondary)';
+            };
+
+            chatSocket.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                
+                // Trata as atualizações de telemetria
+                if (data.type === 'telemetry') {
+                    const stats = data.data;
+                    vramText.innerText = `${stats.vram_used} MB / ${stats.vram_total} MB`;
+                    vramBar.style.width = `${stats.vram_percent}%`;
+                    tempText.innerText = `${stats.temperature}°C`;
+                    loadText.innerText = `${stats.cuda_load}%`;
+                    
+                    if (stats.temperature > 80) {
+                        tempText.style.color = 'var(--accent-red)';
+                    } else if (stats.temperature > 65) {
+                        tempText.style.color = 'orange';
+                    } else {
+                        tempText.style.color = 'var(--secondary)';
+                    }
+                }
+
+                // Trata o status do Jarvis
+                if (data.type === 'status') {
+                    updateStatus(data.status);
+                    if (data.status === 'thinking' || data.status === 'idle') {
+                        stopAllTTSAudio();
+                    }
+                }
+
+                // Trata novas mensagens textuais/de voz
+                if (data.type === 'message') {
+                    if (data.text && (data.text.includes('[Interrompido]') || data.text.includes('[Interrupted]'))) {
+                        stopAllTTSAudio();
+                    }
+                    if (data.sender === 'user') {
+                        activeJarvisBubble = null; // Nova mensagem do usuário encerra a bolha anterior do Jarvis
+                        addMessageToUI(data.sender, data.text, data.origin);
+                    } else if (data.sender === 'jarvis' && activeJarvisBubble) {
+                        // Finaliza a bolha de streaming atual
+                        activeJarvisBubble.classList.remove('generating');
+                        const contentSpan = activeJarvisBubble.querySelector('.bubble-content');
+                        if (contentSpan) {
+                            contentSpan.innerText = data.text;
+                        }
+                        activeJarvisBubble = null;
+                    } else {
+                        addMessageToUI(data.sender, data.text, data.origin);
+                    }
+                }
+
+                // Trata tokens parciais do LLM em tempo real
+                if (data.type === 'token') {
+                    updateOrAddJarvisBubble(data.text, data.origin);
+                }
+            };
+
+            chatSocket.onclose = () => {
+                connStatus.innerText = 'Desconectado (Tentando reconectar...)';
+                connStatus.style.color = 'var(--accent-red)';
+                setTimeout(initChatSocket, 3000);
+            };
+        }
+
+        function updateStatus(status) {
+            if (status === 'recording') {
+                statusDot.style.backgroundColor = 'var(--accent-red)';
+                statusDot.style.boxShadow = '0 0 8px var(--accent-red)';
+                statusTxt.innerText = 'GRAVANDO';
+                statusTxt.style.color = 'var(--accent-red)';
+            } else if (status === 'thinking') {
+                statusDot.style.backgroundColor = 'orange';
+                statusDot.style.boxShadow = '0 0 8px orange';
+                statusTxt.innerText = 'PROCESSANDO';
+                statusTxt.style.color = 'orange';
+            } else if (status === 'speaking') {
+                statusDot.style.backgroundColor = 'var(--secondary)';
+                statusDot.style.boxShadow = '0 0 8px var(--secondary-glow)';
+                statusTxt.innerText = 'FALANDO';
+                statusTxt.style.color = 'var(--secondary)';
+            } else {
+                statusDot.style.backgroundColor = 'var(--accent-green)';
+                statusDot.style.boxShadow = '0 0 8px var(--accent-green)';
+                statusTxt.innerText = 'ONLINE';
+                statusTxt.style.color = 'var(--accent-green)';
+            }
+        }
+
+        function addMessageToUI(sender, text, origin) {
+            const isUser = sender === 'user';
+            
+            const bubble = document.createElement('div');
+            bubble.className = `chat-bubble ${isUser ? 'user' : 'jarvis'}`;
+            
+            const contentSpan = document.createElement('span');
+            contentSpan.className = 'bubble-content';
+            contentSpan.innerText = text;
+            bubble.appendChild(contentSpan);
+
+            const meta = document.createElement('div');
+            meta.className = 'bubble-meta';
+            meta.innerHTML = `<span>${isUser ? 'Você' : 'Jarvis'}</span><span>${origin || ''}</span>`;
+            bubble.appendChild(meta);
+
+            chatBox.appendChild(bubble);
+            chatBox.scrollTop = chatBox.scrollHeight;
+        }
+
+        function updateOrAddJarvisBubble(text, origin) {
+            if (!activeJarvisBubble) {
+                activeJarvisBubble = document.createElement('div');
+                activeJarvisBubble.className = 'chat-bubble jarvis generating';
+                
+                const contentSpan = document.createElement('span');
+                contentSpan.className = 'bubble-content';
+                activeJarvisBubble.appendChild(contentSpan);
+
+                const meta = document.createElement('div');
+                meta.className = 'bubble-meta';
+                meta.innerHTML = `<span>Jarvis</span><span>${origin || ''}</span>`;
+                activeJarvisBubble.appendChild(meta);
+
+                chatBox.appendChild(activeJarvisBubble);
+            }
+            
+            const contentSpan = activeJarvisBubble.querySelector('.bubble-content');
+            if (contentSpan) {
+                contentSpan.innerText = text;
+            }
+            chatBox.scrollTop = chatBox.scrollHeight;
+        }
+
+        // Envia mensagem textual via input
+        function sendTextMessage() {
+            ensureAudioContext();
+            const text = chatInput.value.trim();
+            if (!text || !chatSocket || chatSocket.readyState !== WebSocket.OPEN) return;
+
+            chatSocket.send(JSON.stringify({
+                type: 'message',
+                text: text
+            }));
+            chatInput.value = '';
+        }
+
+        sendBtn.addEventListener('click', sendTextMessage);
+        chatInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') sendTextMessage();
+        });
+
+        // --- Sistema de Áudio / Microfone (Celular & PC) ---
+        let audioCtx = null;
+        let micStream = null;
+        let audioProcessor = null;
+        let isMuted = false;
+        let isRecording = false;
+
+        const micBtn = document.getElementById('mic-connect-btn');
+        const muteBtn = document.getElementById('mute-btn');
+
+        // Canvas e Ondas de Áudio
+        const canvas = document.getElementById('canvas-wave');
+        const canvasCtx = canvas.getContext('2d');
+        let analyser = null;
+        let dataArray = null;
+
+        // Ajusta tamanho do Canvas
+        function resizeCanvas() {
+            canvas.width = canvas.clientWidth;
+            canvas.height = canvas.clientHeight;
+        }
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+
+        // Desenha a linha estática por padrão
+        function drawFlatLine() {
+            canvasCtx.fillStyle = 'rgba(5, 6, 15, 0.7)';
+            canvasCtx.fillRect(0, 0, canvas.width, canvas.height);
+            canvasCtx.lineWidth = 2;
+            canvasCtx.strokeStyle = 'rgba(147, 51, 234, 0.2)';
+            canvasCtx.beginPath();
+            canvasCtx.moveTo(0, canvas.height / 2);
+            canvasCtx.lineTo(canvas.width, canvas.height / 2);
+            canvasCtx.stroke();
+        }
+        drawFlatLine();
+
+        // Loop de renderização do Waveform no Canvas
+        function drawWave() {
+            if (!isRecording) {
+                drawFlatLine();
+                return;
+            }
+
+            requestAnimationFrame(drawWave);
+            analyser.getByteTimeDomainData(dataArray);
+
+            canvasCtx.fillStyle = 'rgba(5, 6, 15, 0.5)';
+            canvasCtx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            // Seleciona a cor do neon baseado no status
+            let strokeColor = 'rgba(6, 182, 212, 0.8)'; // Cyan quando desmutado e gravando
+            if (isMuted) {
+                strokeColor = 'rgba(239, 68, 68, 0.5)'; // Vermelho quando mutado
+            }
+
+            canvasCtx.lineWidth = 3;
+            canvasCtx.strokeStyle = strokeColor;
+            canvasCtx.beginPath();
+
+            const sliceWidth = canvas.width * 1.0 / analyser.fftSize;
+            let x = 0;
+
+            for (let i = 0; i < analyser.fftSize; i++) {
+                const v = dataArray[i] / 128.0;
+                const y = v * canvas.height / 2;
+
+                if (i === 0) {
+                    canvasCtx.moveTo(x, y);
+                } else {
+                    canvasCtx.lineTo(x, y);
+                }
+                x += sliceWidth;
+            }
+
+            canvasCtx.lineTo(canvas.width, canvas.height / 2);
+            canvasCtx.stroke();
+        }
+
+        // Gerenciamento de buffers de áudio do TTS recebidos via WebSocket
+        let nextPlayTime = 0;
+        let activeSources = [];
+
+        function stopAllTTSAudio() {
+            activeSources.forEach(source => {
+                try {
+                    source.stop();
+                } catch (e) {}
+            });
+            activeSources = [];
+            nextPlayTime = 0;
+            console.log('Web Audio: Fila de reprodução limpa e fontes interrompidas.');
+        }
+
+        function ensureAudioContext() {
+            try {
+                if (!audioCtx) {
+                    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                    console.log('Web Audio: AudioContext inicializado.');
+                }
+                if (audioCtx && audioCtx.state === 'suspended') {
+                    audioCtx.resume();
+                    console.log('Web Audio: AudioContext resumido.');
+                }
+            } catch (e) {
+                console.error('Falha ao inicializar/resumir o AudioContext:', e);
+            }
+        }
+
+        // Adiciona ouvinte global de clique para destravar o áudio no Safari/Chrome móvel
+        document.addEventListener('click', ensureAudioContext, { passive: true });
+
+        function playTTSAudioChunk(float32Data, sampleRate) {
+            ensureAudioContext();
+            if (!audioCtx) return;
+
+            // Frequência de amostragem dinâmica (default para 22050Hz)
+            const rate = sampleRate || 22050;
+
+            const buffer = audioCtx.createBuffer(1, float32Data.length, rate);
+            buffer.copyToChannel(float32Data, 0);
+
+            const source = audioCtx.createBufferSource();
+            source.buffer = buffer;
+            source.connect(audioCtx.destination);
+
+            activeSources.push(source);
+            source.onended = () => {
+                activeSources = activeSources.filter(s => s !== source);
+            };
+
+            const now = audioCtx.currentTime;
+            if (nextPlayTime < now) {
+                nextPlayTime = now;
+            }
+
+            source.start(nextPlayTime);
+            nextPlayTime += buffer.duration;
+        }
+
+        // Inicia Conexão de Áudio
+        async function startMicStreaming() {
+            if (isRecording) {
+                // Para a gravação
+                stopMicStreaming();
+                return;
+            }
+
+            try {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                micStream = await navigator.mediaDevices.getUserMedia({ 
+                    audio: {
+                        echoCancellation: true,
+                        noiseSuppression: true,
+                        autoGainControl: true
+                    } 
+                });
+
+                // Inicializa o WebSocket de áudio
+                audioSocket = new WebSocket(audioSocketUrl);
+                audioSocket.binaryType = 'arraybuffer';
+
+                audioSocket.onopen = () => {
+                    console.log('WS Audio: Aberto com sucesso.');
+                };
+
+                audioSocket.onmessage = (event) => {
+                    // Recebe o buffer binário de áudio (Float32) do Piper TTS
+                    // O primeiro valor float32 é o sample_rate dinâmico
+                    const arrayBuffer = event.data;
+                    const float32Data = new Float32Array(arrayBuffer);
+                    if (float32Data.length > 1) {
+                        const sampleRate = Math.round(float32Data[0]);
+                        const audioData = float32Data.subarray(1);
+                        playTTSAudioChunk(audioData, sampleRate);
+                    }
+                };
+
+                const source = audioCtx.createMediaStreamSource(micStream);
+                
+                // Analisador para visualização
+                analyser = audioCtx.createAnalyser();
+                analyser.fftSize = 512;
+                dataArray = new Uint8Array(analyser.fftSize);
+                source.connect(analyser);
+
+                // Processador de script para resampling a 16kHz
+                // Captura blocos de 4096 samples e converte para 16kHz
+                audioProcessor = audioCtx.createScriptProcessor(4096, 1, 1);
+                
+                audioProcessor.onaudioprocess = (e) => {
+                    if (isMuted || !audioSocket || audioSocket.readyState !== WebSocket.OPEN) return;
+
+                    const inputData = e.inputBuffer.getChannelData(0);
+                    // Resample para 16000Hz
+                    const resampled = resampleBuffer(inputData, audioCtx.sampleRate, 16000);
+                    
+                    // Envia em formato binário Float32
+                    audioSocket.send(resampled.buffer);
+                };
+
+                source.connect(audioProcessor);
+                audioProcessor.connect(audioCtx.destination);
+
+                isRecording = true;
+                micBtn.innerHTML = `
+                    <svg width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M5 3a3 3 0 0 1 6 0v5a3 3 0 0 1-6 0V3z"/><path d="M3.5 6.5A.5.5 0 0 1 4 7a4 4 0 0 0 8 0 .5.5 0 0 1 1 0 5 5 0 0 1-4.5 4.975V15h3a.5.5 0 0 1 0 1h-7a.5.5 0 0 1 0-1h3v-3.025A5 5 0 0 1 3 7a.5.5 0 0 1 .5-.5z"/></svg>
+                    <span>Parar Microfone</span>
+                `;
+                micBtn.classList.add('active-record');
+                muteBtn.style.display = 'flex';
+
+                // Inicia desenho do Canvas
+                drawWave();
+
+            } catch (err) {
+                console.error('Falha ao acessar o microfone:', err);
+                alert('Impossível acessar o microfone. Certifique-se de estar usando HTTPS e ter dado permissão.');
+            }
+        }
+
+        function stopMicStreaming() {
+            stopAllTTSAudio();
+            if (audioProcessor) {
+                audioProcessor.disconnect();
+                audioProcessor = null;
+            }
+            if (micStream) {
+                micStream.getTracks().forEach(track => track.stop());
+                micStream = null;
+            }
+            if (audioSocket) {
+                audioSocket.close();
+                audioSocket = null;
+            }
+            isRecording = false;
+            micBtn.innerHTML = `
+                <svg width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M5 3a3 3 0 0 1 6 0v5a3 3 0 0 1-6 0V3z"/><path d="M3.5 6.5A.5.5 0 0 1 4 7a4 4 0 0 0 8 0 .5.5 0 0 1 1 0 5 5 0 0 1-4.5 4.975V15h3a.5.5 0 0 1 0 1h-7a.5.5 0 0 1 0-1h3v-3.025A5 5 0 0 1 3 7a.5.5 0 0 1 .5-.5z"/></svg>
+                <span>Iniciar Microfone</span>
+            `;
+            micBtn.classList.remove('active-record');
+            muteBtn.style.display = 'none';
+            drawFlatLine();
+        }
+
+        // Algoritmo simples de interpolação linear para downsampling de áudio
+        function resampleBuffer(inputBuffer, fromSampleRate, toSampleRate) {
+            const ratio = fromSampleRate / toSampleRate;
+            const newLength = Math.round(inputBuffer.length / ratio);
+            const result = new Float32Array(newLength);
+            
+            for (let i = 0; i < newLength; i++) {
+                result[i] = inputBuffer[Math.min(Math.round(i * ratio), inputBuffer.length - 1)];
+            }
+            return result;
+        }
+
+        micBtn.addEventListener('click', startMicStreaming);
+
+        // Ação Mute
+        muteBtn.addEventListener('click', () => {
+            isMuted = !isMuted;
+            if (isMuted) {
+                stopAllTTSAudio();
+                muteBtn.classList.remove('muted');
+                muteBtn.innerHTML = `
+                    <svg width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M11.536 14.01A8.473 8.473 0 0 0 14.01 11.536l-1.398-1.398A6.516 6.516 0 0 1 11 11.536v2.474zm-2.023 2.023a8.473 8.473 0 0 0 2.474-2.474l-1.398-1.398a6.516 6.516 0 0 1-1.076 3.872zm-3.872-1.076a6.516 6.516 0 0 1-3.872-1.076l-1.398 1.398a8.473 8.473 0 0 0 2.474 2.474l2.796-2.796zm-3.872-3.872a6.516 6.516 0 0 1 1.076-3.872l-1.398-1.398A8.473 8.473 0 0 0 1 10.146l2.796-2.796z"/></svg>
+                    <span>Ativar Microfone</span>
+                `;
+                muteBtn.classList.add('muted');
+            } else {
+                muteBtn.classList.remove('muted');
+                muteBtn.innerHTML = `
+                    <svg width="16" height="16" fill="currentColor" viewBox="0 0 16 16"><path d="M6.717 3.55A.5.5 0 0 1 7 4v8a.5.5 0 0 1-.812.39L3.825 10.5H1.5A.5.5 0 0 1 1 10V6a.5.5 0 0 1 .5-.5h2.325l2.363-1.89a.5.5 0 0 1 .529-.06zM6 4.364 4.012 5.954A.5.5 0 0 1 3.687 6H1.5v4h2.187a.5.5 0 0 1 .325.13L6 11.636V4.364zM10.146 5.646a.5.5 0 0 1 .708 0l3 3a.5.5 0 0 1-.708.708l-3-3a.5.5 0 0 1 0-.708z"/><path d="M10.146 9.354a.5.5 0 0 1 0-.708l3-3a.5.5 0 0 1 .708.708l-3 3a.5.5 0 0 1-.708 0z"/></svg>
+                    <span>Mudar Som (Mute)</span>
+                `;
+            }
+        });
+
+        // --- Widgets do Home Assistant ---
+        const haListContainer = document.getElementById('ha-devices-list');
+
+        async function LoadHADevices() {
+            try {
+                const response = await fetch('/api/ha/devices');
+                const devices = await response.json();
+                
+                if (devices.length === 0) {
+                    haListContainer.innerHTML = `
+                        <div style="font-size: 12px; color: var(--text-muted); text-align: center; width: 100%; padding: 15px;">
+                            Nenhum dispositivo encontrado no Home Assistant.
+                        </div>
+                    `;
+                    return;
+                }
+
+                haListContainer.innerHTML = '';
+                
+                // Prioriza entidades do domínio 'light' e 'switch'
+                const targetDomains = ['light', 'switch'];
+                const filtered = devices.filter(d => {
+                    const dom = d.entity_id.split('.')[0];
+                    return targetDomains.includes(dom);
+                });
+
+                if (filtered.length === 0) {
+                    haListContainer.innerHTML = `
+                        <div style="font-size: 12px; color: var(--text-muted); text-align: center; width: 100%; padding: 15px;">
+                            Nenhum interruptor ou lâmpada encontrado.
+                        </div>
+                    `;
+                    return;
+                }
+
+                filtered.forEach(dev => {
+                    const item = document.createElement('div');
+                    item.className = 'ha-device-item';
+                    
+                    const isChecked = dev.state === 'on';
+
+                    item.innerHTML = `
+                        <div class="device-info">
+                            <span class="device-name">${dev.name}</span>
+                            <span class="device-entity">${dev.entity_id}</span>
+                        </div>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="toggle-${dev.entity_id}" ${isChecked ? 'checked' : ''} onchange="toggleDevice('${dev.entity_id}')">
+                            <span class="toggle-slider"></span>
+                        </label>
+                    `;
+                    haListContainer.appendChild(item);
+                });
+
+            } catch (err) {
+                console.error('Erro ao ler dispositivos do HA:', err);
+                haListContainer.innerHTML = `
+                    <div style="font-size: 12px; color: var(--accent-red); text-align: center; width: 100%; padding: 15px;">
+                        Erro ao conectar ao Home Assistant.
+                    </div>
+                `;
+            }
+        }
+
+        // Toggle controle Home Assistant
+        window.toggleDevice = async function(entityId) {
+            const checkbox = document.getElementById(`toggle-${entityId}`);
+            const stateToSet = checkbox.checked ? 'turn_on' : 'turn_off';
+            const domain = entityId.split('.')[0];
+            
+            try {
+                await fetch('/api/ha/control', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        domain: domain,
+                        service: stateToSet,
+                        entity_id: entityId
+                    })
+                });
+            } catch (err) {
+                console.error('Falha ao acionar dispositivo:', err);
+                checkbox.checked = !checkbox.checked; // Reverte o switch se falhar
+            }
+        };
+
+        // Inicializa conexões e carrega dados
+        initChatSocket();
+        LoadHADevices();
+
+    </script>
+</body>
+</html>

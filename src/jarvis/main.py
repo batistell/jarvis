@@ -72,6 +72,8 @@ from jarvis.stt.vad import VADDetector
 from jarvis.llm.engine import LLMEngine
 from jarvis.tts.engine import TTSEngine
 from jarvis.core.homeassistant import HomeAssistantClient
+import jarvis.ui.web as web
+from jarvis.core.ssl_gen import generate_self_signed_cert
 
 console = Console()
 log = get_logger("jarvis.main")
@@ -102,12 +104,17 @@ def extract_sentences(buffer: str) -> tuple[list[str], str]:
     while i < n:
         char = buffer[i]
         current.append(char)
-        if char in ('.', '!', '?', '\n'):
+        if char in ('.', '!', '?', '\n', ',', ';', ':'):
             is_boundary = False
             if char == '\n':
                 is_boundary = True
             elif i + 1 < n and buffer[i + 1] in (' ', '\n', '\t'):
-                is_boundary = True
+                # Para pontuações fracas como vírgula, dois pontos e ponto e vírgula, só divide se houver conteúdo mínimo
+                if char in (',', ';', ':'):
+                    if len(current) >= 30:
+                        is_boundary = True
+                else:
+                    is_boundary = True
             
             if is_boundary:
                 sentence = "".join(current).strip()
@@ -265,6 +272,51 @@ async def run_stt_loop() -> None:
         else:
             console.print("[yellow]⚠️ Nenhum dispositivo encontrado ou falha na conexão com o Home Assistant.[/yellow]\n")
 
+    # 1. Gera certificados autoassinados se HTTPS estiver ativo
+    ssl_cert = Path(settings.web.ssl_cert_path)
+    ssl_key = Path(settings.web.ssl_key_path)
+    if settings.web.ssl_enabled:
+        generate_self_signed_cert(ssl_cert, ssl_key)
+
+    # 2. Injeta as instâncias dos motores carregados no módulo web
+    web.llm_engine = llm
+    web.tts_engine = tts
+    web.ha_client = ha_client
+    web.transcriber_engine = transcriber
+
+    # 3. Inicia o servidor Uvicorn em background (no mesmo event loop)
+    import uvicorn
+    web_config = uvicorn.Config(
+        "jarvis.ui.web:app",
+        host=settings.web.host,
+        port=settings.web.port,
+        ssl_keyfile=str(ssl_key) if settings.web.ssl_enabled else None,
+        ssl_certfile=str(ssl_cert) if settings.web.ssl_enabled else None,
+        log_level="warning",
+    )
+    web_server = uvicorn.Server(web_config)
+    asyncio.create_task(web_server.serve())
+    
+    # Exibe URLs amigáveis para o usuário
+    protocol = "https" if settings.web.ssl_enabled else "http"
+    if settings.web.host == "0.0.0.0":
+        local_ip = "127.0.0.1"
+        try:
+            import socket
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            local_ip = s.getsockname()[0]
+            s.close()
+        except Exception:
+            pass
+        
+        console.print(f"[green]✅ Servidor Web {protocol.upper()} ativo![/green]")
+        console.print(f"👉 Para acessar deste computador: [bold cyan]{protocol}://localhost:{settings.web.port}[/bold cyan]")
+        if local_ip != "127.0.0.1":
+            console.print(f"👉 Para acessar do celular ou outros dispositivos na mesma rede: [bold cyan]{protocol}://{local_ip}:{settings.web.port}[/bold cyan]\n")
+    else:
+        console.print(f"[green]✅ Servidor Web {protocol.upper()} ativo em [bold cyan]{protocol}://{settings.web.host}:{settings.web.port}[/bold cyan]![/green]\n")
+
     # Define a ação executada ao detectar duas palmas
     async def handle_double_clap() -> None:
         log.info("Conversa: Callback de duas palmas disparado!")
@@ -327,22 +379,32 @@ async def run_stt_loop() -> None:
     audio_buffer: list[np.ndarray] = []
     is_speaking = False
     silent_chunks = 0
-    tts_last_active_time = 0.0
     conversa_fluida_active = False
 
+    # Controle de tarefas assíncronas e estados compartilhados com web.py
+    web.tts_last_active_time = 0.0
+    web.llm_task = None
+    web.llm_generating = False
+    web.llm_interrupted_by_voice = False
 
-    # Controle de tarefas assíncronas para o LLM
-    llm_task: asyncio.Task | None = None
-    llm_generating = False
     partial_newline_printed = False
-    llm_interrupted_by_voice = False
     partial_in_progress = False
 
-    async def generate_response(prompt_text: str, lang: str, original_query: str | None = None) -> None:
-        nonlocal llm_generating
-        llm_generating = True
-        log.info("PERF: Iniciando geração do LLM para o prompt: '{}'", prompt_text)
-        console.print("🤖 [bold cyan]Jarvis:[/bold cyan] ", end="")
+    async def generate_response(
+        prompt_text: str,
+        lang: str,
+        original_query: str | None = None,
+        on_audio_chunk: callable | None = None,
+        origin: str = "Terminal"
+    ) -> None:
+        web.llm_generating = True
+        web.llm_task = asyncio.current_task()
+        log.info("PERF: Iniciando geração do LLM para o prompt: '{}' (Origem: {})", prompt_text, origin)
+        console.print(f"🤖 [bold cyan]Jarvis [{origin}]:[/bold cyan] ", end="")
+        
+        # Avisa a interface web que o Jarvis começou a falar/responder
+        await web.broadcast_chat_status("speaking")
+        
         full_response_parts = []
         sentence_buffer = ""
         first_token_received = False
@@ -355,16 +417,42 @@ async def run_stt_loop() -> None:
                 sys.stdout.flush()
                 full_response_parts.append(token)
 
+                # Transmite o texto gerado em tempo real para a interface do navegador
+                current_text = "".join(full_response_parts)
+                asyncio.create_task(
+                    web.broadcast_chat_message({
+                        "type": "token",
+                        "sender": "jarvis",
+                        "origin": origin,
+                        "text": current_text
+                    })
+                )
+
                 sentence_buffer += token
                 sentences, sentence_buffer = extract_sentences(sentence_buffer)
                 for sentence in sentences:
-                    # Envia a frase para a fila do TTS em segundo plano
-                    tts.speak_stream(sentence, lang)
+                    # Envia a frase para a fila do TTS em segundo plano (com o callback do navegador se disponível)
+                    tts.speak_stream(sentence, lang, on_audio_chunk=on_audio_chunk)
+                    if origin == "Navegador":
+                        # Registra nos textos recentemente falados do navegador para AEC
+                        clean_s = sentence.lower().strip()
+                        for p in [".", ",", "!", "?", "-", '"', "'"]:
+                            clean_s = clean_s.replace(p, "")
+                        clean_s = clean_s.strip()
+                        if clean_s:
+                            web.browser_recent_texts.append((time.time(), clean_s))
 
             # Envia a última parte restante do buffer ao finalizar a geração
             remaining_sentence = sentence_buffer.strip()
             if remaining_sentence:
-                tts.speak_stream(remaining_sentence, lang)
+                tts.speak_stream(remaining_sentence, lang, on_audio_chunk=on_audio_chunk)
+                if origin == "Navegador":
+                    clean_s = remaining_sentence.lower().strip()
+                    for p in [".", ",", "!", "?", "-", '"', "'"]:
+                        clean_s = clean_s.replace(p, "")
+                    clean_s = clean_s.strip()
+                    if clean_s:
+                        web.browser_recent_texts.append((time.time(), clean_s))
             
             log.info("PERF: Geração do LLM concluída com sucesso.")
             
@@ -376,18 +464,36 @@ async def run_stt_loop() -> None:
             if cleaned_user_msg.lower().strip().startswith("jarvis"):
                 cleaned_user_msg = cleaned_user_msg.strip()[6:].strip(", ").strip()
             asyncio.create_task(llm.save_conversation_turn(cleaned_user_msg, full_response))
+            
+            # Notifica os chats web com o texto final da resposta
+            await web.broadcast_chat_message({
+                "type": "message",
+                "sender": "jarvis",
+                "origin": origin,
+                "text": full_response
+            })
         except asyncio.CancelledError:
             # Geração foi cancelada por interrupção de fala
             log.info("PERF: Geração do LLM cancelada por interrupção de voz.")
             tts.stop()
             console.print(" [bold red][Interrompido][/bold red]")
+            await web.broadcast_chat_message({
+                "type": "message",
+                "sender": "jarvis",
+                "origin": origin,
+                "text": "".join(full_response_parts) + " [Interrompido]"
+            })
         except Exception as e:
             log.error("PERF: Erro na geração de resposta do LLM: {}", e)
             console.print(f"\n[red]Erro ao gerar resposta do Jarvis: {e}[/red]")
         finally:
             sys.stdout.write("\n\n")
             sys.stdout.flush()
-            llm_generating = False
+            web.llm_generating = False
+            await web.broadcast_chat_status("idle")
+
+    # Vincula o callback para que web.py possa disparar respostas no mesmo fluxo
+    web.generate_response_callback = generate_response
 
     # Controle de transcrição parcial (para não sobrecarregar)
     last_partial_time = 0.0
@@ -403,17 +509,17 @@ async def run_stt_loop() -> None:
             speech_detected = vad.is_speech(chunk)
 
             # Mantém tts_last_active_time atualizado enquanto o Jarvis estiver ocupado gerando ou falando
-            is_jarvis_busy = llm_generating or tts._is_playing or not tts._queue.empty()
+            is_jarvis_busy = web.llm_generating or tts._is_playing or not tts._queue.empty()
             if is_jarvis_busy:
-                tts_last_active_time = time.time()
+                web.tts_last_active_time = time.time()
 
             # Suspende a escuta de palmas enquanto o Jarvis ou o usuário estão falando
             mic.is_listening_for_claps = not (is_jarvis_busy or is_speaking)
 
             # Atualização dinâmica do indicador visual no console para Conversa Fluida
             now = time.time()
-            if tts_last_active_time > 0.0:
-                is_conversa_fluida = (now - tts_last_active_time) < (settings.audio.full_duplex_cooldown_ms / 1000)
+            if web.tts_last_active_time > 0.0:
+                is_conversa_fluida = (now - web.tts_last_active_time) < (settings.audio.full_duplex_cooldown_ms / 1000)
                 if is_conversa_fluida:
                     # Mostra o indicador somente quando Jarvis terminar de falar/processar para não poluir
                     if not is_jarvis_busy and not conversa_fluida_active:
@@ -454,7 +560,7 @@ async def run_stt_loop() -> None:
                                 log.info("PERF: Transcrição Whisper concluída. Texto: '{}' (Idioma: {})", final_text, detected_lang)
                                 if final_text:
                                     # Define se Jarvis estava ativo (gerando, falando ou recém-interrompido)
-                                    was_jarvis_active = llm_generating or tts._is_playing or not tts._queue.empty() or llm_interrupted_by_voice
+                                    was_jarvis_active = web.llm_generating or tts._is_playing or not tts._queue.empty() or web.llm_interrupted_by_voice
 
                                     # Limpa a transcrição para verificar se é eco da própria voz do Jarvis
                                     final_text_clean = final_text.lower().strip()
@@ -482,7 +588,7 @@ async def run_stt_loop() -> None:
                                         log.info("AEC: Transcrição de eco ignorada: '{}'", final_text)
                                         audio_buffer.clear()
                                         silent_chunks = 0
-                                        llm_interrupted_by_voice = False
+                                        web.llm_interrupted_by_voice = False
                                         continue
 
                                     # Definição das palavras de parada e ativação suportadas
@@ -490,8 +596,8 @@ async def run_stt_loop() -> None:
 
                                     # Define se estamos no período de conversa continuada
                                     is_conversa_fluida = False
-                                    if tts_last_active_time > 0.0:
-                                        is_conversa_fluida = (time.time() - tts_last_active_time) < (settings.audio.full_duplex_cooldown_ms / 1000)
+                                    if web.tts_last_active_time > 0.0:
+                                        is_conversa_fluida = (time.time() - web.tts_last_active_time) < (settings.audio.full_duplex_cooldown_ms / 1000)
 
                                     # Se Jarvis estava ativo, interrompe apenas com palavras de parada suportadas.
                                     # Se estiver na janela de conversa fluida, aceita qualquer comando diretamente.
@@ -516,9 +622,9 @@ async def run_stt_loop() -> None:
 
                                         if is_stop_command:
                                             # Interrompe tudo e fica em silêncio
-                                            if llm_task and not llm_task.done():
+                                            if web.llm_task and not web.llm_task.done():
                                                 llm.interrupt()
-                                                llm_task.cancel()
+                                                web.llm_task.cancel()
                                             tts.stop()
                                             log.info("Conversa: Jarvis foi silenciado por comando de voz.")
 
@@ -526,13 +632,23 @@ async def run_stt_loop() -> None:
                                                 sys.stdout.write("\n")
                                                 sys.stdout.flush()
                                             sys.stdout.write("\r\033[K")
-                                            console.print(f"[bold green]🗣️  Você ({detected_lang}):[/bold green] {final_text} [bold red][Interrompido][/bold red]")
+                                            console.print(f"[bold green]🗣️  Você [Terminal] ({detected_lang}):[/bold green] {final_text} [bold red][Interrompido][/bold red]")
+                                            # Sincroniza o chat web
+                                            asyncio.create_task(
+                                                web.broadcast_chat_message({
+                                                    "type": "message",
+                                                    "sender": "user",
+                                                    "origin": "Terminal",
+                                                    "text": final_text + " [Interrompido]",
+                                                    "lang": detected_lang
+                                                })
+                                            )
                                         else:
                                             # Se o LLM está gerando ou o TTS está reproduzindo, interrompe a geração anterior antes de responder
-                                            if llm_generating or tts._is_playing or (llm_task and not llm_task.done()):
-                                                if llm_task and not llm_task.done():
+                                            if web.llm_generating or tts._is_playing or (web.llm_task and not web.llm_task.done()):
+                                                if web.llm_task and not web.llm_task.done():
                                                     llm.interrupt()
-                                                    llm_task.cancel()
+                                                    web.llm_task.cancel()
                                                 tts.stop()
                                                 log.info("Conversa: Jarvis foi interrompido pela fala do usuário (nova pergunta).")
 
@@ -541,7 +657,18 @@ async def run_stt_loop() -> None:
                                                 sys.stdout.write("\n")
                                                 sys.stdout.flush()
                                             sys.stdout.write("\r\033[K")  # Limpa linha
-                                            console.print(f"[bold green]🗣️  Você ({detected_lang}):[/bold green] {final_text}")
+                                            console.print(f"[bold green]🗣️  Você [Terminal] ({detected_lang}):[/bold green] {final_text}")
+                                            
+                                            # Sincroniza o chat web
+                                            asyncio.create_task(
+                                                web.broadcast_chat_message({
+                                                    "type": "message",
+                                                    "sender": "user",
+                                                    "origin": "Terminal",
+                                                    "text": final_text,
+                                                    "lang": detected_lang
+                                                })
+                                            )
                                             
                                             # Tenta fazer o matching semântico local rápido para o Home Assistant
                                             matched = match_local_ha_command(final_text, ha_client.entities) if ha_client and ha_client.entities else None
@@ -566,20 +693,22 @@ async def run_stt_loop() -> None:
                                                     "Eu já executei a ação no Home Assistant com sucesso em segundo plano. "
                                                     "Por favor, confirme verbalmente a conclusão dessa ação com uma frase curta, educada e elegante."
                                                 )
-                                                llm_task = asyncio.create_task(
+                                                web.llm_task = asyncio.create_task(
                                                     generate_response(
                                                         prompt_text=spoken_prompt,
                                                         lang=detected_lang,
-                                                        original_query=final_text
+                                                        original_query=final_text,
+                                                        origin="Terminal"
                                                     )
                                                 )
                                             else:
                                                 # Fallback padrão: Envia para o LLM resolver via tool calling
-                                                llm_task = asyncio.create_task(
+                                                web.llm_task = asyncio.create_task(
                                                     generate_response(
                                                         prompt_text=final_text,
                                                         lang=detected_lang,
-                                                        original_query=final_text
+                                                        original_query=final_text,
+                                                        origin="Terminal"
                                                     )
                                                 )
                                     else:
@@ -604,7 +733,7 @@ async def run_stt_loop() -> None:
                         # Reseta buffers
                         audio_buffer.clear()
                         silent_chunks = 0
-                        llm_interrupted_by_voice = False
+                        web.llm_interrupted_by_voice = False
 
             # 2. Transcrição Parcial (Real-time Feedback)
             if is_speaking and len(audio_buffer) > 0 and not partial_in_progress:
@@ -627,7 +756,7 @@ async def run_stt_loop() -> None:
                                 if text:
                                     # Se o usuário disser uma palavra de parada específica durante a geração ou reprodução, interrompe IMEDIATAMENTE!
                                     # Verificado mesmo se o VAD já mudou is_speaking para False
-                                    if llm_generating or tts._is_playing or not tts._queue.empty():
+                                    if web.llm_generating or tts._is_playing or not tts._queue.empty():
                                         cleaned_text = text.lower().strip()
                                         for p in [".", ",", "!", "?", "-"]:
                                             cleaned_text = cleaned_text.replace(p, "")
@@ -635,11 +764,10 @@ async def run_stt_loop() -> None:
 
                                         stop_words = ("jarvis", "para", "pare", "parar", "cala a boca", "silêncio", "quieto", "stop", "shut up", "be quiet", "silence", "pera", "espera", "calma", "chega", "shh", "shush")
                                         if any(word in cleaned_text for word in stop_words):
-                                            if llm_task and not llm_task.done():
-                                                nonlocal llm_interrupted_by_voice
+                                            if web.llm_task and not web.llm_task.done():
                                                 llm.interrupt()
-                                                llm_task.cancel()
-                                                llm_interrupted_by_voice = True
+                                                web.llm_task.cancel()
+                                                web.llm_interrupted_by_voice = True
                                             tts.stop()
                                             log.info(f"Conversa: Jarvis foi interrompido imediatamente ao detectar a palavra de parada '{cleaned_text}'.")
 

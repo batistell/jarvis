@@ -15,6 +15,7 @@ dependencies = [
     "pydantic>=2.0,<3.0",
     "pydantic-settings>=2.0,<3.0",
     "python-dotenv>=1.0",
+    "cryptography",
 
     # --- Logging ---
     "loguru>=0.7",
@@ -80,7 +81,7 @@ ignore = ["ANN101", "ANN102"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-asyncio_mode = "auto"
+asyncio_mode = "strict"
 
 [tool.mypy]
 python_version = "3.11"
