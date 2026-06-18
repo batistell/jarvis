@@ -12,7 +12,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Response
 from fastapi.responses import FileResponse
 from loguru import logger
 
@@ -126,6 +126,72 @@ async def get_index() -> FileResponse:
     if not index_file.exists():
         raise HTTPException(status_code=404, detail="index.html não encontrado no diretório templates.")
     return FileResponse(index_file)
+
+
+@app.get("/manifest.json")
+async def get_manifest() -> dict:
+    """Retorna o manifesto PWA do aplicativo."""
+    return {
+        "short_name": "Jarvis",
+        "name": "Jarvis Web Dashboard",
+        "description": "Painel de controle por voz do assistente Jarvis",
+        "icons": [
+            {
+                "src": "/icon.svg",
+                "sizes": "192x192 512x512",
+                "type": "image/svg+xml",
+                "purpose": "any maskable"
+            }
+        ],
+        "start_url": "/",
+        "background_color": "#080300",
+        "theme_color": "#ff5500",
+        "display": "standalone",
+        "orientation": "portrait"
+    }
+
+
+@app.get("/icon.svg")
+async def get_icon() -> Response:
+    """Retorna o ícone SVG futurista do Jarvis."""
+    svg_content = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+        <!-- Background -->
+        <rect width="512" height="512" rx="128" fill="#080300"/>
+        
+        <!-- Faint Outer Ring -->
+        <circle cx="256" cy="256" r="200" fill="none" stroke="rgba(255, 85, 0, 0.05)" stroke-width="4"/>
+        
+        <!-- Outer dashed HUD circle (Glowing Orange) -->
+        <!-- Outer Glow -->
+        <circle cx="256" cy="256" r="130" fill="none" stroke="#ff5500" stroke-width="28" stroke-dasharray="24, 24" opacity="0.25"/>
+        <!-- Core line -->
+        <circle cx="256" cy="256" r="130" fill="none" stroke="#ff5500" stroke-width="12" stroke-dasharray="28, 20"/>
+        
+        <!-- Inner solid HUD circle (Glowing Gold/Yellow) -->
+        <!-- Inner Glow -->
+        <circle cx="256" cy="256" r="70" fill="none" stroke="#ffaa00" stroke-width="20" stroke-dasharray="none" opacity="0.3"/>
+        <!-- Core line -->
+        <circle cx="256" cy="256" r="70" fill="none" stroke="#ffaa00" stroke-width="8"/>
+        
+        <!-- Central Core (Glowing White/Orange Dot) -->
+        <circle cx="256" cy="256" r="20" fill="#ff5500" opacity="0.3"/>
+        <circle cx="256" cy="256" r="10" fill="#ffffff"/>
+    </svg>"""
+    return Response(content=svg_content, media_type="image/svg+xml")
+
+
+@app.get("/sw.js")
+async def get_service_worker() -> Response:
+    """Retorna um Service Worker básico para habilitar instalação de PWA no navegador."""
+    sw_content = """
+    self.addEventListener('install', (e) => {
+        self.skipWaiting();
+    });
+    self.addEventListener('fetch', (e) => {
+        // Pass-through
+    });
+    """
+    return Response(content=sw_content, media_type="application/javascript")
 
 
 @app.get("/api/stats")

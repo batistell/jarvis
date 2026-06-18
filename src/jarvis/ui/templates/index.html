@@ -4,6 +4,11 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Jarvis — Web Dashboard</title>
+    <!-- PWA settings -->
+    <link rel="manifest" href="/manifest.json">
+    <link rel="icon" type="image/svg+xml" href="/icon.svg">
+    <link rel="apple-touch-icon" href="/icon.svg">
+    <meta name="theme-color" content="#ff5500">
     <!-- Google Fonts -->
     <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;600;800;900&family=Share+Tech+Mono&family=Inter:wght@300;400;600;700&display=swap" rel="stylesheet">
     <style>
@@ -1312,6 +1317,17 @@
         // Inicializa conexões e carrega dados
         initChatSocket();
         LoadHADevices();
+
+        // Registra o Service Worker para suporte a PWA (instalação de app)
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('/sw.js').then(reg => {
+                    console.log('Service Worker registrado:', reg.scope);
+                }).catch(err => {
+                    console.log('Falha ao registrar Service Worker:', err);
+                });
+            });
+        }
 
     </script>
 </body>

@@ -77,17 +77,23 @@ class MicCapture:
                 # Pico máximo absoluto no chunk bruto
                 max_val = float(np.max(np.abs(raw_audio)))
                 if max_val > self.clap_threshold:
-                    now = time.time()
-                    if now > self.cooldown_ends:
-                        self.cooldown_ends = now + 0.15  # Cooldown de 150ms
-                        
-                        if self.last_clap_time > 0.0 and (0.15 <= (now - self.last_clap_time) <= 0.8):
-                            log.info("MicCapture: Duas palmas detectadas! Acionando callback.")
-                            self.last_clap_time = 0.0
-                            if self.on_double_clap:
-                                self._loop.call_soon_threadsafe(self.on_double_clap)
-                        else:
-                            self.last_clap_time = now
+                    rms_val = float(np.sqrt(np.mean(raw_audio**2)))
+                    # Relação Pico-para-RMS (Crest Factor) para identificar transientes rápidos (palmas)
+                    # e filtrar sons contínuos/longos como fala, sopro ou tosse.
+                    crest_factor = max_val / rms_val if rms_val > 1e-4 else 0.0
+                    
+                    if crest_factor > 4.5:
+                        now = time.time()
+                        if now > self.cooldown_ends:
+                            self.cooldown_ends = now + 0.20  # Cooldown de 200ms para evitar duplo registro do mesmo transiente
+                            
+                            if self.last_clap_time > 0.0 and (0.20 <= (now - self.last_clap_time) <= 0.8):
+                                log.info(f"MicCapture: Duas palmas detectadas! (Pico: {max_val:.3f}, Crest: {crest_factor:.2f})")
+                                self.last_clap_time = 0.0
+                                if self.on_double_clap:
+                                    self._loop.call_soon_threadsafe(self.on_double_clap)
+                            else:
+                                self.last_clap_time = now
                 
                 # Excedeu a janela de tempo de 800ms: descarta a primeira palma
                 if self.last_clap_time > 0.0 and (time.time() - self.last_clap_time > 0.8):

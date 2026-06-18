@@ -22,11 +22,13 @@ def start_cloudflare_tunnel(
     port: int,
     ssl_enabled: bool,
     project_root: Path,
+    token: str = "",
+    domain: str = "",
 ) -> tuple[str | None, subprocess.Popen | None]:
     """Inicia o executável cloudflared e extrai a URL pública do túnel.
 
     Registra um hook atexit para garantir que o processo seja finalizado quando o
-    Jarvis encerrar.
+    Jarvis encerrar. Supports tunnels run via token and domain.
     """
     binary_name = "cloudflared.exe" if sys.platform == "win32" else "cloudflared"
     cf_path = project_root / binary_name
@@ -35,14 +37,18 @@ def start_cloudflare_tunnel(
         log.warning(f"Executável do Cloudflare ({binary_name}) não encontrado em: {cf_path}")
         return None, None
 
-    protocol = "https" if ssl_enabled else "http"
-    local_url = f"{protocol}://localhost:{port}"
-
-    cmd = [str(cf_path.resolve()), "tunnel", "--url", local_url]
-    if ssl_enabled:
-        cmd.append("--no-tls-verify")
-
-    log.info(f"Iniciando túnel Cloudflare para {local_url}...")
+    if token:
+        # Modo Túnel Fixo por Token
+        cmd = [str(cf_path.resolve()), "tunnel", "run", "--token", token]
+        log.info("Iniciando túnel Cloudflare fixo por token...")
+    else:
+        # Modo Túnel Rápido (Quick Tunnel) temporário
+        protocol = "https" if ssl_enabled else "http"
+        local_url = f"{protocol}://localhost:{port}"
+        cmd = [str(cf_path.resolve()), "tunnel", "--url", local_url]
+        if ssl_enabled:
+            cmd.append("--no-tls-verify")
+        log.info(f"Iniciando túnel Cloudflare temporário para {local_url}...")
 
     try:
         # Executa em background redirecionando stderr para stdout
@@ -60,7 +66,7 @@ def start_cloudflare_tunnel(
     # Registra o encerramento automático do processo ao sair do script
     def cleanup_tunnel():
         if process.poll() is None:
-            log.info("Cloudflare: Encerrando túnel público...")
+            log.info("Cloudflare: Encerrando túnel...")
             process.terminate()
             try:
                 process.wait(timeout=2)
@@ -69,6 +75,21 @@ def start_cloudflare_tunnel(
             log.info("Cloudflare: Túnel encerrado com sucesso.")
 
     atexit.register(cleanup_tunnel)
+
+    if token:
+        # Se for um túnel fixo via token, não procuramos por URL temporária nos logs.
+        # Retornamos o domínio se o usuário o informou.
+        public_url = f"https://{domain}" if domain else "Túnel Fixo Ativo (verifique no painel do Cloudflare)"
+        # Dorme um breve período para certificar de que o processo não morreu imediatamente por token inválido etc.
+        time.sleep(1.5)
+        if process.poll() is not None:
+            error_output = process.stdout.read().strip()
+            log.error(f"O processo cloudflared encerrou prematuramente com código: {process.returncode}")
+            if error_output:
+                log.error(f"Saída de erro do cloudflared:\n{error_output}")
+            return None, process
+        log.info(f"Túnel Cloudflare via token estabelecido! URL: {public_url}")
+        return public_url, process
 
     # Expressão regular para encontrar a URL pública gerada no log do cloudflared
     url_pattern = re.compile(r"https://[a-zA-Z0-9-]+\.trycloudflare\.com")

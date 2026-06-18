@@ -114,7 +114,7 @@ class AudioSettings(BaseSettings):
     chunk_duration_ms: int = 30  # duração de cada chunk de áudio (ms)
     noise_reduction_enabled: bool = True
     full_duplex_cooldown_ms: int = 15000
-    clap_threshold: float = 0.35
+    clap_threshold: float = 0.45
 
 
 
@@ -197,6 +197,15 @@ class HomeAssistantSettings(BaseSettings):
     token: str = ""
 
 
+class CloudflareSettings(BaseSettings):
+    """Configurações do túnel Cloudflare."""
+
+    model_config = SettingsConfigDict(env_prefix="JARVIS_CLOUDFLARE_")
+
+    token: str = ""
+    domain: str = ""
+
+
 class Settings(BaseSettings):
     """Configurações raízes do Jarvis.
 
@@ -225,6 +234,7 @@ class Settings(BaseSettings):
     web: WebSettings = Field(default_factory=WebSettings)
     tts: TTSSettings = Field(default_factory=TTSSettings)
     ha: HomeAssistantSettings = Field(default_factory=HomeAssistantSettings)
+    cloudflare: CloudflareSettings = Field(default_factory=CloudflareSettings)
 
     @property
     def project_root(self) -> Path:

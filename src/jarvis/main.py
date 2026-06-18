@@ -318,7 +318,9 @@ async def run_stt_loop() -> None:
             start_cloudflare_tunnel,
             settings.web.port,
             settings.web.ssl_enabled,
-            settings.project_root
+            settings.project_root,
+            settings.cloudflare.token,
+            settings.cloudflare.domain,
         )
     except Exception as e:
         log.error(f"Erro ao iniciar o túnel Cloudflare: {e}")
