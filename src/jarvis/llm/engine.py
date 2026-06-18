@@ -169,7 +169,7 @@ class LLMEngine:
             await loop.run_in_executor(self._executor, self.load_model)
 
         # RAG Context Retrieval — async pipeline com skip para comandos curtos
-        _RAG_SKIP_WORDS = 6  # prompts < N palavras pulam embedding (~177ms economizados)
+        _RAG_SKIP_WORDS = 2  # prompts < N palavras pulam embedding (~177ms economizados)
         context = ""
         conv_context = ""
         word_count = len(prompt.split())
@@ -204,7 +204,7 @@ class LLMEngine:
                 doc_results = await self._vector_store.query_collection(
                     collection_name="documents",
                     query_embeddings=[query_emb],
-                    limit=2,
+                    limit=4,
                 )
                 context_parts = []
                 for r in doc_results:

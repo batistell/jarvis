@@ -63,7 +63,7 @@ class LLMSettings(BaseSettings):
     n_gpu_layers: int = -1  # -1 = offload total para GPU
     n_ctx: int = 4096
     temperature: float = 0.7
-    max_tokens: int = 1024
+    max_tokens: int = 4096
     top_p: float = 0.9
 
     @property

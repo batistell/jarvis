@@ -30,7 +30,8 @@ dependencies = [
     "llama-cpp-python>=0.3",
 
     # --- Embeddings & Vector Store ---
-    "sentence-transformers>=3.0",
+    "sentence-transformers>=3.0,<4.0",
+    "accelerate",
     "chromadb>=0.5",
     "pypdf>=4.0",
 
