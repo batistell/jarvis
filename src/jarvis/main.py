@@ -309,25 +309,43 @@ async def run_stt_loop() -> None:
     web_server = uvicorn.Server(web_config)
     asyncio.create_task(web_server.serve())
     
+    # 4. Inicia o túnel Cloudflare
+    cf_url = None
+    try:
+        from jarvis.core.cloudflare import start_cloudflare_tunnel
+        cf_url, _ = await loop.run_in_executor(
+            None,
+            start_cloudflare_tunnel,
+            settings.web.port,
+            settings.web.ssl_enabled,
+            settings.project_root
+        )
+    except Exception as e:
+        log.error(f"Erro ao iniciar o túnel Cloudflare: {e}")
+
     # Exibe URLs amigáveis para o usuário
     protocol = "https" if settings.web.ssl_enabled else "http"
+    local_ip = "127.0.0.1"
+    try:
+        import socket
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        local_ip = s.getsockname()[0]
+        s.close()
+    except Exception:
+        pass
+
+    console.print(f"[green]✅ Servidor Web {protocol.upper()} ativo![/green]")
     if settings.web.host == "0.0.0.0":
-        local_ip = "127.0.0.1"
-        try:
-            import socket
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            s.connect(("8.8.8.8", 80))
-            local_ip = s.getsockname()[0]
-            s.close()
-        except Exception:
-            pass
-        
-        console.print(f"[green]✅ Servidor Web {protocol.upper()} ativo![/green]")
-        console.print(f"👉 Para acessar deste computador: [bold cyan]{protocol}://localhost:{settings.web.port}[/bold cyan]")
+        console.print(f"👉 Local: [bold cyan]{protocol}://localhost:{settings.web.port}[/bold cyan]")
         if local_ip != "127.0.0.1":
-            console.print(f"👉 Para acessar do celular ou outros dispositivos na mesma rede: [bold cyan]{protocol}://{local_ip}:{settings.web.port}[/bold cyan]\n")
+            console.print(f"👉 Rede Local (WLAN/LAN): [bold cyan]{protocol}://{local_ip}:{settings.web.port}[/bold cyan]")
     else:
-        console.print(f"[green]✅ Servidor Web {protocol.upper()} ativo em [bold cyan]{protocol}://{settings.web.host}:{settings.web.port}[/bold cyan]![/green]\n")
+        console.print(f"👉 Endereço: [bold cyan]{protocol}://{settings.web.host}:{settings.web.port}[/bold cyan]")
+        
+    if cf_url:
+        console.print(f"👉 Cloudflare (Acesso Público): [bold cyan]{cf_url}[/bold cyan]")
+    console.print("")
 
     # Define a ação executada ao detectar duas palmas
     async def handle_double_clap() -> None:
@@ -514,14 +532,88 @@ async def run_stt_loop() -> None:
     # Vincula o callback para que web.py possa disparar respostas no mesmo fluxo
     web.generate_response_callback = generate_response
 
+    # Loop em background para capturar instruções via texto diretamente no terminal
+    async def terminal_input_loop() -> None:
+        import sys
+        loop = asyncio.get_running_loop()
+        while True:
+            try:
+                # Como sys.stdin.readline é blocante, executamos no executor padrão
+                line = await loop.run_in_executor(None, sys.stdin.readline)
+                if not line:
+                    break
+                text = line.strip()
+                if not text:
+                    continue
+
+                # Trata comando de parada textual
+                text_clean = text.lower().strip()
+                for p in [".", ",", "!", "?", "-"]:
+                    text_clean = text_clean.replace(p, "")
+                text_clean = text_clean.strip()
+
+                is_stop_command = text_clean in ("pare", "parar", "stop", "silêncio", "quieto", "espera")
+                if is_stop_command:
+                    if web.llm_task and not web.llm_task.done():
+                        llm.interrupt()
+                        web.llm_task.cancel()
+                    tts.stop()
+                    log.info("Conversa: Jarvis foi silenciado por comando de parada textual no Terminal.")
+                    # Notifica a interface web
+                    await web.broadcast_chat_message({
+                        "type": "message",
+                        "sender": "user",
+                        "origin": "Terminal",
+                        "text": text + " [Interrompido]"
+                    })
+                    await web.broadcast_chat_message({
+                        "type": "message",
+                        "sender": "jarvis",
+                        "origin": "Terminal",
+                        "text": "[Interrompido]"
+                    })
+                    continue
+
+                # Interrompe qualquer geração/reprodução anterior ativa
+                if web.llm_generating or tts._is_playing or (web.llm_task and not web.llm_task.done()):
+                    if web.llm_task and not web.llm_task.done():
+                        llm.interrupt()
+                        web.llm_task.cancel()
+                    tts.stop()
+                    log.info("Conversa: Jarvis interrompido por entrada de texto no Terminal.")
+
+                # Imprime no console terminal local indicando que recebeu o texto
+                console.print(f"[bold green]🗣️  Você [Terminal] (texto):[/bold green] {text}")
+
+                # Sincroniza o chat web
+                await web.broadcast_chat_message({
+                    "type": "message",
+                    "sender": "user",
+                    "origin": "Terminal",
+                    "text": text
+                })
+
+                # Dispara a geração de resposta
+                web.llm_task = asyncio.create_task(
+                    generate_response(
+                        prompt_text=text,
+                        lang="pt",
+                        original_query=text,
+                        origin="Terminal"
+                    )
+                )
+            except Exception as e:
+                log.error(f"Erro no loop de entrada de texto do terminal: {e}")
+
     # Controle de transcrição parcial (para não sobrecarregar)
     last_partial_time = 0.0
     partial_interval_s = 0.35  # Transcreve parcial a cada 350ms
 
     console.print("[bold cyan]🎙️  Microfone Ativo. Pode começar a falar![/bold cyan]")
-    console.print("[dim]Pressione Ctrl+C para encerrar.[/dim]\n")
+    console.print("[dim]Pressione Ctrl+C para encerrar ou digite texto para enviar instruções.[/dim]\n")
 
     mic.start()
+    input_task = asyncio.create_task(terminal_input_loop())
     try:
         async for chunk in mic.stream():
             # Mantém tts_last_active_time atualizado enquanto o Jarvis estiver ocupado gerando ou falando
@@ -846,6 +938,7 @@ async def run_stt_loop() -> None:
         pass
     finally:
         mic.stop()
+        input_task.cancel()
         console.print("\n[yellow]🎙️  Microfone desativado.[/yellow]")
 
 
