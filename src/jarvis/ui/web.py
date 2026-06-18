@@ -213,6 +213,38 @@ async def ws_chat_endpoint(websocket: WebSocket) -> None:
                 text = data["text"]
                 logger.info(f"WS Chat: Recebida pergunta textual do Navegador: '{text}'")
 
+                # Trata comando de parada textual
+                text_clean = text.lower().strip()
+                for p in [".", ",", "!", "?", "-"]:
+                    text_clean = text_clean.replace(p, "")
+                text_clean = text_clean.strip()
+
+                is_stop_command = text_clean in ("pare", "parar", "stop", "silêncio", "quieto", "espera")
+                if is_stop_command:
+                    if llm_task and not llm_task.done():
+                        llm_engine.interrupt()
+                        llm_task.cancel()
+                    if tts_engine:
+                        tts_engine.stop()
+                    llm_interrupted_by_voice = True
+                    browser_tts_end_time = 0.0
+                    logger.info("WS Chat: Jarvis silenciado por comando de parada textual do Navegador.")
+
+                    await broadcast_chat_message({
+                        "type": "message",
+                        "sender": "user",
+                        "origin": "Navegador",
+                        "text": text + " [Interrompido]"
+                    })
+                    await broadcast_chat_message({
+                        "type": "message",
+                        "sender": "jarvis",
+                        "origin": "Navegador",
+                        "text": "[Interrompido]"
+                    })
+                    await broadcast_chat_status("idle")
+                    continue
+
                 # Imprime no terminal local indicando origem
                 print(f"\n🗣️  Você [Navegador] (texto): {text}")
 
@@ -366,18 +398,22 @@ async def ws_audio_endpoint(websocket: WebSocket) -> None:
                                         now = time.time()
                                         browser_recent_texts = [entry for entry in browser_recent_texts if now - entry[0] < 20.0]
 
-                                        for _, spoken_text in browser_recent_texts:
-                                            if text_clean in spoken_text or spoken_text in text_clean:
-                                                is_echo = True
-                                                break
-                                            else:
-                                                words_trans = set(text_clean.split())
-                                                words_spok = set(spoken_text.split())
-                                                if words_trans and words_spok:
-                                                    intersection = words_trans.intersection(words_spok)
-                                                    if len(intersection) / len(words_trans) > 0.6:
-                                                        is_echo = True
-                                                        break
+                                        # Se o usuário falou uma palavra de parada, faz bypass do AEC para garantir que a interrupção ocorra
+                                        has_stop_word = any(word in text_clean for word in ("pare", "parar", "cala a boca", "silêncio", "quieto", "stop", "shut up", "be quiet", "silence", "pera", "espera", "calma", "chega", "shh", "shush"))
+
+                                        if not has_stop_word:
+                                            for _, spoken_text in browser_recent_texts:
+                                                if text_clean in spoken_text or spoken_text in text_clean:
+                                                    is_echo = True
+                                                    break
+                                                else:
+                                                    words_trans = set(text_clean.split())
+                                                    words_spok = set(spoken_text.split())
+                                                    if words_trans and words_spok:
+                                                        intersection = words_trans.intersection(words_spok)
+                                                        if len(intersection) / len(words_trans) > 0.6:
+                                                            is_echo = True
+                                                            break
 
                                         if is_echo:
                                             logger.info(f"WS Audio AEC: Eco do TTS ignorado no Navegador: '{text}'")
@@ -520,27 +556,9 @@ async def ws_audio_endpoint(websocket: WebSocket) -> None:
 
                                             stop_words = ("pare", "parar", "cala a boca", "silêncio", "quieto", "stop", "shut up", "be quiet", "silence", "pera", "espera", "calma", "chega", "shh", "shush")
                                             if any(word in text_clean for word in stop_words):
-                                                # AEC check on partial transcription to ensure Jarvis's own voice doesn't trigger false self-interruption
+                                                # Para transcrição parcial com palavras de parada, fazemos bypass completo do AEC
+                                                # para garantir interrupção de voz ultra-responsiva
                                                 is_echo = False
-                                                now = time.time()
-                                                browser_recent_texts = [entry for entry in browser_recent_texts if now - entry[0] < 20.0]
-
-                                                for _, spoken_text in browser_recent_texts:
-                                                    if text_clean in spoken_text or spoken_text in text_clean:
-                                                        is_echo = True
-                                                        break
-                                                    else:
-                                                        words_trans = set(text_clean.split())
-                                                        words_spok = set(spoken_text.split())
-                                                        if words_trans and words_spok:
-                                                            intersection = words_trans.intersection(words_spok)
-                                                            if len(intersection) / len(words_trans) > 0.6:
-                                                                is_echo = True
-                                                                break
-
-                                                if is_echo:
-                                                    logger.debug(f"WS Audio AEC Parcial: Eco do TTS ignorado: '{text}'")
-                                                    return
 
                                                 # Interrompe geração e áudio imediatamente!
                                                 if llm_task and not llm_task.done():
