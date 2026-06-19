@@ -7,6 +7,7 @@ o acesso remoto ao painel web do Jarvis de forma simples e segura.
 from __future__ import annotations
 
 import atexit
+import os
 import re
 import subprocess
 import sys
@@ -50,6 +51,11 @@ def start_cloudflare_tunnel(
             cmd.append("--no-tls-verify")
         log.info(f"Iniciando túnel Cloudflare temporário para {local_url}...")
 
+    # Injeta a desativação de validação de TLS no ambiente do processo para HTTPS local
+    env = os.environ.copy()
+    env["TUNNEL_NO_TLS_VERIFY"] = "true"
+    env["NO_TLS_VERIFY"] = "true"
+
     try:
         # Executa em background redirecionando stderr para stdout
         process = subprocess.Popen(
@@ -58,6 +64,7 @@ def start_cloudflare_tunnel(
             stderr=subprocess.STDOUT,
             text=True,
             bufsize=1,
+            env=env,
         )
     except Exception as e:
         log.error(f"Falha ao executar cloudflared: {e}")

@@ -311,9 +311,10 @@ async def run_stt_loop() -> None:
     
     # 4. Inicia o túnel Cloudflare
     cf_url = None
+    cf_proc = None
     try:
         from jarvis.core.cloudflare import start_cloudflare_tunnel
-        cf_url, _ = await loop.run_in_executor(
+        cf_url, cf_proc = await loop.run_in_executor(
             None,
             start_cloudflare_tunnel,
             settings.web.port,
@@ -324,6 +325,18 @@ async def run_stt_loop() -> None:
         )
     except Exception as e:
         log.error(f"Erro ao iniciar o túnel Cloudflare: {e}")
+
+    if cf_proc:
+        async def drain_cloudflare_logs():
+            try:
+                while cf_proc.poll() is None:
+                    line = await loop.run_in_executor(None, cf_proc.stdout.readline)
+                    if not line:
+                        break
+                    log.debug(f"cloudflared: {line.strip()}")
+            except Exception as le:
+                log.error(f"Erro ao drenar logs do cloudflared: {le}")
+        asyncio.create_task(drain_cloudflare_logs())
 
     # Exibe URLs amigáveis para o usuário
     protocol = "https" if settings.web.ssl_enabled else "http"
