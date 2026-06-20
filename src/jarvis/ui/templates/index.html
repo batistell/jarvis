@@ -11,6 +11,128 @@
     <meta name="theme-color" content="#ff5500">
     <!-- Google Fonts -->
     <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;600;800;900&family=Share+Tech+Mono&family=Inter:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <!-- Firebase SDK (Google Analytics & Auth) -->
+    <script type="module">
+      import { initializeApp } from "https://www.gstatic.com/firebasejs/12.15.0/firebase-app.js";
+      import { getAnalytics } from "https://www.gstatic.com/firebasejs/12.15.0/firebase-analytics.js";
+      import { 
+        getAuth, 
+        signInWithPopup, 
+        GoogleAuthProvider, 
+        onAuthStateChanged, 
+        signOut 
+      } from "https://www.gstatic.com/firebasejs/12.15.0/firebase-auth.js";
+
+      const firebaseConfig = {
+        apiKey: "AIzaSyANojRtnQoIBem3om3QgCw7U_QWi9qS0WA",
+        authDomain: "jarvis-1006b.firebaseapp.com",
+        projectId: "jarvis-1006b",
+        storageBucket: "jarvis-1006b.firebasestorage.app",
+        messagingSenderId: "854235972977",
+        appId: "1:854235972977:web:dda2aa5a70eab811f422d0",
+        measurementId: "G-1C3QT4F27G"
+      };
+
+      const app = initializeApp(firebaseConfig);
+      const analytics = getAnalytics(app);
+      const auth = getAuth(app);
+      const provider = new GoogleAuthProvider();
+
+      // Guardar referências nos objetos globais para o outro script usar
+      window.firebaseAuth = auth;
+      window.firebaseProvider = provider;
+      window.firebaseToken = "";
+
+      const authOverlay = document.getElementById("auth-overlay");
+      const userProfileBadge = document.getElementById("user-profile-badge");
+      const userPhoto = document.getElementById("user-photo");
+      const userName = document.getElementById("user-name");
+      const loginBtn = document.getElementById("google-login-btn");
+      const logoutBtn = document.getElementById("logout-btn-header");
+      const errorMsg = document.getElementById("auth-error-msg");
+
+      // Trata clique no botão de login
+      loginBtn.addEventListener("click", () => {
+        errorMsg.innerText = "";
+        signInWithPopup(auth, provider)
+          .catch((error) => {
+            console.error("Erro de login:", error);
+            errorMsg.innerText = "Falha na autenticação: " + error.message;
+          });
+      });
+
+      // Trata clique no logout
+      logoutBtn.addEventListener("click", () => {
+        signOut(auth).then(() => {
+          window.location.reload();
+        });
+      });
+
+      // Escuta mudanças de estado de autenticação
+      onAuthStateChanged(auth, (user) => {
+        if (user) {
+          errorMsg.innerText = "Verificando permissões no servidor...";
+          loginBtn.disabled = true;
+
+          user.getIdToken().then((token) => {
+            // Valida o token com o backend do Jarvis para checar permissão de email
+            fetch('/api/stats', {
+              headers: { 'Authorization': `Bearer ${token}` }
+            })
+            .then((res) => {
+              if (res.ok) {
+                window.firebaseToken = token;
+                
+                // Exibe perfil do usuário
+                userPhoto.src = user.photoURL || "";
+                userName.innerText = user.displayName || user.email;
+                userProfileBadge.style.display = "flex";
+                authOverlay.style.display = "none";
+                errorMsg.innerText = "";
+
+                // Inicializa as conexões no dashboard principal
+                if (typeof window.startDashboard === "function") {
+                  window.startDashboard(token);
+                }
+              } else if (res.status === 403) {
+                errorMsg.innerText = "Acesso negado: e-mail não autorizado no servidor.";
+                signOut(auth);
+              } else {
+                errorMsg.innerText = "Falha de validação com o servidor central.";
+                signOut(auth);
+              }
+            })
+            .catch((err) => {
+              console.error("Erro na verificação de permissão:", err);
+              errorMsg.innerText = "Falha de conexão com o servidor do Jarvis.";
+              signOut(auth);
+            })
+            .finally(() => {
+              loginBtn.disabled = false;
+            });
+          });
+
+          // Define um intervalo para atualizar o token a cada 45 minutos (o token do Firebase dura 1 hora)
+          setInterval(() => {
+            if (auth.currentUser) {
+              auth.currentUser.getIdToken(true).then((token) => {
+                window.firebaseToken = token;
+                console.log("Token do Firebase atualizado com sucesso.");
+              });
+            }
+          }, 45 * 60 * 1000);
+
+        } else {
+          // Deslogado: mostra tela de login
+          window.firebaseToken = "";
+          userProfileBadge.style.display = "none";
+          authOverlay.style.display = "flex";
+          if (typeof window.stopDashboard === "function") {
+            window.stopDashboard();
+          }
+        }
+      });
+    </script>
     <style>
         :root {
             --bg-color: #080300;
@@ -638,15 +760,39 @@
 </head>
 <body>
 
+    <!-- Overlays de Autenticação (Firebase Login) -->
+    <div id="auth-overlay" style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(8, 3, 0, 0.95); backdrop-filter: blur(20px); z-index: 10000; display: flex; align-items: center; justify-content: center; flex-direction: column; background-image: linear-gradient(var(--grid-color) 1px, transparent 1px), linear-gradient(90deg, var(--grid-color) 1px, transparent 1px); background-size: 30px 30px;">
+        <div style="background: rgba(25, 10, 2, 0.65); border: 1px solid var(--border-color); padding: 40px; border-radius: 12px; max-width: 420px; width: 90%; text-align: center; box-shadow: 0 10px 40px rgba(255, 85, 0, 0.15); display: flex; flex-direction: column; align-items: center; gap: 24px;">
+            <div style="width: 80px; height: 80px; border-radius: 50%; border: 3px dashed var(--primary); display: flex; align-items: center; justify-content: center; position: relative; animation: rotate-hud 15s linear infinite;">
+                <div style="width: 50px; height: 50px; border-radius: 50%; border: 3px solid var(--secondary); animation: rotate-hud-reverse 8s linear infinite;"></div>
+            </div>
+            <h2 style="font-family: 'Orbitron', sans-serif; font-size: 26px; letter-spacing: 2px; color: #fff; text-shadow: 0 0 15px var(--primary-glow);">JARVIS</h2>
+            <p style="font-size: 13px; color: var(--text-muted); line-height: 1.6; font-family: 'Share Tech Mono', monospace;">ACESSO RESTRITO. POR FAVOR, AUTENTIQUE-SE PARA CONECTAR AO CONTROLADOR CENTRAL.</p>
+            <button id="google-login-btn" style="background: linear-gradient(135deg, var(--primary), var(--secondary)); border: none; border-radius: 6px; color: #000; font-family: 'Orbitron', sans-serif; font-size: 13px; font-weight: 800; padding: 14px 28px; cursor: pointer; transition: all 0.3s; width: 100%; display: flex; align-items: center; justify-content: center; gap: 10px; box-shadow: 0 0 15px rgba(255, 85, 0, 0.3); border: 1px solid rgba(255, 255, 255, 0.15);">
+                <svg width="18" height="18" fill="currentColor" viewBox="0 0 24 24" style="flex-shrink: 0;"><path d="M12.24 10.285V14.4h6.887c-.648 2.41-2.519 4.114-5.136 4.114-3.555 0-6.444-2.889-6.444-6.444s2.889-6.444 6.444-6.444c1.614 0 3.085.595 4.226 1.58l3.053-3.053C19.043 2.138 15.828 1 12.24 1A10.99 10.99 0 0 0 1.25 12a10.99 10.99 0 0 0 10.99 11c5.967 0 10.76-4.8 10.76-11 0-.745-.078-1.47-.22-2.171l-10.54-.544z"/></svg>
+                <span>ENTRAR COM GOOGLE</span>
+            </button>
+            <div id="auth-error-msg" style="color: var(--accent-red); font-size: 12px; font-family: 'Share Tech Mono', monospace; min-height: 18px; text-transform: uppercase;"></div>
+        </div>
+    </div>
+
     <header>
         <div class="logo-container">
             <div class="logo-icon"></div>
             <h1>JARVIS</h1>
         </div>
-        <div class="header-badges" style="display: flex; gap: 12px; align-items: center;">
+        <div class="header-badges" style="display: flex; gap: 16px; align-items: center;">
             <div class="status-badge">
                 <div class="status-dot"></div>
                 <span id="jarvis-status-txt">ONLINE</span>
+            </div>
+            <!-- Slot de Usuário Autenticado -->
+            <div id="user-profile-badge" style="display: none; align-items: center; gap: 10px; background: rgba(255, 85, 0, 0.08); border: 1px solid var(--border-color); padding: 4px 10px; border-radius: 4px; font-family: 'Share Tech Mono', monospace; font-size: 12px;">
+                <img id="user-photo" src="" alt="User" style="width: 20px; height: 20px; border-radius: 50%; border: 1px solid var(--secondary);">
+                <span id="user-name" style="color: var(--text-color);">Conectado</span>
+                <button id="logout-btn-header" style="background: none; border: none; color: var(--accent-red); cursor: pointer; display: flex; align-items: center; justify-content: center; padding: 2px; transition: color 0.3s;" title="Desconectar">
+                    <svg width="14" height="14" fill="currentColor" viewBox="0 0 16 16"><path fill-rule="evenodd" d="M10 12.5a.5.5 0 0 1-.5.5h-8a.5.5 0 0 1-.5-.5v-9a.5.5 0 0 1 .5-.5h8a.5.5 0 0 1 .5.5v2a.5.5 0 0 0 1 0v-2A1.5 1.5 0 0 0 9.5 2h-8A1.5 1.5 0 0 0 0 3.5v9A1.5 1.5 0 0 0 1.5 14h8a1.5 1.5 0 0 0 1.5-1.5v-2a.5.5 0 0 0-1 0v2z"/><path fill-rule="evenodd" d="M15.854 8.354a.5.5 0 0 0 0-.708l-3-3a.5.5 0 0 0-.708.708L14.293 7.5H5.5a.5.5 0 0 0 0 1h8.793l-2.147 2.146a.5.5 0 0 0 .708.708l3-3z"/></svg>
+                </button>
             </div>
         </div>
     </header>
@@ -742,14 +888,13 @@
     </div>
 
     <script>
+        let firebaseToken = "";
+
         // Configura conexões WebSockets usando a porta e endereço corretos (HTTPS/WSS automático)
         const isSecure = window.location.protocol === 'https:';
         const wsProtocol = isSecure ? 'wss://' : 'ws://';
         const wsHost = window.location.host;
         
-        const chatSocketUrl = `${wsProtocol}${wsHost}/ws/chat`;
-        const audioSocketUrl = `${wsProtocol}${wsHost}/ws/audio`;
-
         let chatSocket = null;
         let audioSocket = null;
 
@@ -772,6 +917,11 @@
 
         // Inicializa Websocket de Chat/Status
         function initChatSocket() {
+            if (!firebaseToken) return;
+            if (chatSocket && (chatSocket.readyState === WebSocket.OPEN || chatSocket.readyState === WebSocket.CONNECTING)) {
+                return; // Já está conectado ou conectando
+            }
+            const chatSocketUrl = `${wsProtocol}${wsHost}/ws/chat?token=${encodeURIComponent(firebaseToken)}`;
             chatSocket = new WebSocket(chatSocketUrl);
             chatSocket.onopen = () => {
                 connStatus.innerText = 'Conectado';
@@ -780,6 +930,17 @@
 
             chatSocket.onmessage = (event) => {
                 const data = JSON.parse(event.data);
+                
+                // Trata erros de autenticação do WebSocket
+                if (data.type === 'error') {
+                    console.error('Erro no WebSocket:', data.message);
+                    if (data.message.includes('Não autorizado') || data.message.includes('Token') || data.message.includes('expirado')) {
+                        alert('Conexão recusada pelo Jarvis: ' + data.message);
+                        if (window.firebaseAuth) {
+                            window.firebaseAuth.signOut();
+                        }
+                    }
+                }
                 
                 // Trata as atualizações de telemetria
                 if (data.type === 'telemetry') {
@@ -836,9 +997,14 @@
             };
 
             chatSocket.onclose = () => {
-                connStatus.innerText = 'Desconectado (Tentando reconectar...)';
-                connStatus.style.color = 'var(--accent-red)';
-                setTimeout(initChatSocket, 3000);
+                if (firebaseToken) {
+                    connStatus.innerText = 'Desconectado (Tentando reconectar...)';
+                    connStatus.style.color = 'var(--accent-red)';
+                    setTimeout(initChatSocket, 3000);
+                } else {
+                    connStatus.innerText = 'Desconectado';
+                    connStatus.style.color = 'var(--accent-red)';
+                }
             };
         }
 
@@ -850,6 +1016,66 @@
                 } else {
                     fluidaBadge.style.display = 'none';
                 }
+            }
+        }
+
+        function silenciarJarvis() {
+            if (isRecording) {
+                stopMicStreaming();
+            }
+            stopAllTTSAudio();
+            if (chatSocket && chatSocket.readyState === WebSocket.OPEN) {
+                chatSocket.send(JSON.stringify({
+                    type: 'message',
+                    text: 'pare'
+                }));
+            }
+        }
+
+        function updateMediaSession(status) {
+            if ('mediaSession' in navigator) {
+                let title = "Jarvis";
+                let artist = "Assistente Pessoal Local";
+                let playbackState = "none";
+                
+                if (status === 'recording') {
+                    title = "Microfone Ativo";
+                    artist = "Jarvis está ouvindo...";
+                    playbackState = "playing";
+                } else if (status === 'thinking') {
+                    title = "Processando Raciocínio";
+                    artist = "Jarvis está pensando...";
+                    playbackState = "playing";
+                } else if (status === 'speaking') {
+                    title = "Reproduzindo Resposta";
+                    artist = "Jarvis está falando...";
+                    playbackState = "playing";
+                } else {
+                    title = "Jarvis Online";
+                    artist = "Aguardando comando...";
+                    playbackState = "paused";
+                }
+                
+                navigator.mediaSession.metadata = new MediaMetadata({
+                    title: title,
+                    artist: artist,
+                    album: "Painel de Controle Jarvis",
+                    artwork: [
+                        { src: '/icon.png', sizes: '512x512', type: 'image/png' }
+                    ]
+                });
+                
+                navigator.mediaSession.playbackState = playbackState;
+                
+                // Configura ações do fone / lock screen
+                navigator.mediaSession.setActionHandler('pause', () => {
+                    console.log('MediaSession: Pausa acionada. Silenciando Jarvis...');
+                    silenciarJarvis();
+                });
+                navigator.mediaSession.setActionHandler('stop', () => {
+                    console.log('MediaSession: Parar acionado. Silenciando Jarvis...');
+                    silenciarJarvis();
+                });
             }
         }
 
@@ -875,6 +1101,8 @@
                 statusTxt.innerText = 'ONLINE';
                 statusTxt.style.color = 'var(--secondary)';
             }
+            // Atualiza a notificação de mídia nativa (Media Session)
+            updateMediaSession(status);
         }
 
         function addMessageToUI(sender, text, origin) {
@@ -1108,6 +1336,7 @@
                 });
 
                 // Inicializa o WebSocket de áudio
+                const audioSocketUrl = `${wsProtocol}${wsHost}/ws/audio?token=${encodeURIComponent(firebaseToken)}`;
                 audioSocket = new WebSocket(audioSocketUrl);
                 audioSocket.binaryType = 'arraybuffer';
 
@@ -1232,8 +1461,11 @@
         const haListContainer = document.getElementById('ha-devices-list');
 
         async function LoadHADevices() {
+            if (!firebaseToken) return;
             try {
-                const response = await fetch('/api/ha/devices');
+                const response = await fetch('/api/ha/devices', {
+                    headers: { 'Authorization': `Bearer ${firebaseToken}` }
+                });
                 const devices = await response.json();
                 
                 if (devices.length === 0) {
@@ -1301,7 +1533,10 @@
             try {
                 await fetch('/api/ha/control', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: { 
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${firebaseToken}`
+                    },
                     body: JSON.stringify({
                         domain: domain,
                         service: stateToSet,
@@ -1315,8 +1550,20 @@
         };
 
         // Inicializa conexões e carrega dados
-        initChatSocket();
-        LoadHADevices();
+        window.startDashboard = function(token) {
+            firebaseToken = token;
+            initChatSocket();
+            LoadHADevices();
+        };
+
+        window.stopDashboard = function() {
+            firebaseToken = "";
+            stopMicStreaming();
+            if (chatSocket) {
+                chatSocket.close();
+                chatSocket = null;
+            }
+        };
 
         // Registra o Service Worker para suporte a PWA (instalação de app)
         if ('serviceWorker' in navigator) {

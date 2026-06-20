@@ -16,6 +16,7 @@ dependencies = [
     "pydantic-settings>=2.0,<3.0",
     "python-dotenv>=1.0",
     "cryptography",
+    "firebase-admin",
 
     # --- Logging ---
     "loguru>=0.7",

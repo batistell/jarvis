@@ -12,14 +12,118 @@ from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Response
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Response, Depends
 from fastapi.responses import FileResponse
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from loguru import logger
+import jwt
+import httpx
+from cryptography.x509 import load_pem_x509_certificate
 
 # Configurações do Jarvis
 from jarvis.config.settings import get_settings
 
 app = FastAPI(title="Jarvis Web Dashboard")
+
+# Dependência do FastAPI para segurança via Bearer Token
+security = HTTPBearer()
+
+# Cache em memória para as chaves públicas do Google securetoken
+_google_certs_cache: dict[str, str] = {}
+_google_certs_expires: float = 0.0
+
+def _get_google_public_key(kid: str) -> str:
+    """Busca a chave pública correspondente ao kid do token a partir do securetoken do Google."""
+    global _google_certs_cache, _google_certs_expires
+    import time
+    now = time.time()
+    
+    if not _google_certs_cache or now > _google_certs_expires:
+        logger.info("Buscando chaves públicas do Firebase securetoken do Google...")
+        url = "https://www.googleapis.com/robot/v1/metadata/x509/securetoken@system.gserviceaccount.com"
+        res = httpx.get(url)
+        res.raise_for_status()
+        _google_certs_cache = res.json()
+        
+        # Define tempo de expiração baseado no cabeçalho Cache-Control (geralmente ~6 horas)
+        cache_control = res.headers.get("Cache-Control", "")
+        max_age = 21600 # padrão de 6 horas
+        for part in cache_control.split(","):
+            if "max-age" in part:
+                try:
+                    max_age = int(part.split("=")[1].strip())
+                except Exception:
+                    pass
+        _google_certs_expires = now + max_age
+        
+    if kid not in _google_certs_cache:
+        raise ValueError(f"Chave pública do Google com kid '{kid}' não encontrada.")
+        
+    return _google_certs_cache[kid]
+
+def _get_public_key_from_cert(cert_pem: str):
+    """Carrega o certificado PEM X.509 e retorna a chave pública associada."""
+    cert = load_pem_x509_certificate(cert_pem.encode('utf-8'))
+    return cert.public_key()
+
+def verify_firebase_token(token: str | None) -> dict:
+    """Verifica manualmente a assinatura digital do Token de ID do Firebase via PyJWT.
+    
+    Isso elimina a necessidade de inicializar o Firebase Admin SDK com credenciais de serviço locais (ADC).
+    """
+    if not token:
+        raise HTTPException(status_code=401, detail="Token de autenticação ausente.")
+    try:
+        # Decodifica o cabeçalho sem validar para extrair a Key ID (kid)
+        header = jwt.get_unverified_header(token)
+        kid = header.get("kid")
+        if not kid:
+            raise HTTPException(status_code=401, detail="Token inválido: cabeçalho sem campo 'kid'.")
+            
+        # Obtém a chave pública e valida a assinatura
+        cert_pem = _get_google_public_key(kid)
+        public_key = _get_public_key_from_cert(cert_pem)
+        
+        settings = get_settings()
+        project_id = settings.firebase.project_id
+        
+        decoded_token = jwt.decode(
+            token,
+            public_key,
+            algorithms=["RS256"],
+            audience=project_id,
+            issuer=f"https://securetoken.google.com/{project_id}"
+        )
+        
+        email = decoded_token.get("email")
+        email_verified = decoded_token.get("email_verified")
+        
+        allowed_emails_str = settings.firebase.allowed_emails
+        allowed_emails = [e.strip().lower() for e in allowed_emails_str.split(",") if e.strip()]
+        
+        if not email or not email_verified:
+            raise HTTPException(status_code=403, detail="E-mail inválido ou não verificado pelo Google.")
+            
+        if allowed_emails and email.lower() not in allowed_emails:
+            logger.warning(f"Tentativa de login não autorizada com o e-mail: {email}")
+            raise HTTPException(status_code=403, detail="Acesso não autorizado para esta conta Google.")
+            
+        return decoded_token
+    except HTTPException:
+        raise
+    except jwt.ExpiredSignatureError as e:
+        logger.warning(f"Sessão expirada: {e}")
+        raise HTTPException(status_code=401, detail="Token de sessão expirado.")
+    except jwt.InvalidTokenError as e:
+        logger.warning(f"Token inválido recebido: {e}")
+        raise HTTPException(status_code=401, detail=f"Token inválido: {e}")
+    except Exception as e:
+        logger.error(f"Erro ao verificar token Firebase: {e}")
+        raise HTTPException(status_code=401, detail=f"Erro de autenticação: {e}")
+
+async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> dict:
+    """Extrai e valida o token Bearer das requisições HTTP REST."""
+    return verify_firebase_token(credentials.credentials)
 
 # Referências globais dos motores pre-carregados (injetadas por main.py)
 llm_engine = None
@@ -141,6 +245,12 @@ async def get_manifest() -> dict:
                 "sizes": "192x192 512x512",
                 "type": "image/svg+xml",
                 "purpose": "any maskable"
+            },
+            {
+                "src": "/icon.png",
+                "sizes": "512x512",
+                "type": "image/png",
+                "purpose": "any maskable"
             }
         ],
         "start_url": "/",
@@ -180,6 +290,15 @@ async def get_icon() -> Response:
     return Response(content=svg_content, media_type="image/svg+xml")
 
 
+@app.get("/icon.png")
+async def get_icon_png() -> FileResponse:
+    """Retorna o ícone rasterizado PNG do Jarvis."""
+    png_file = UI_TEMPLATES_DIR / "icon.png"
+    if not png_file.exists():
+        raise HTTPException(status_code=404, detail="icon.png não encontrado.")
+    return FileResponse(png_file)
+
+
 @app.get("/sw.js")
 async def get_service_worker() -> Response:
     """Retorna um Service Worker básico para habilitar instalação de PWA no navegador."""
@@ -195,13 +314,13 @@ async def get_service_worker() -> Response:
 
 
 @app.get("/api/stats")
-async def get_stats_api() -> dict:
+async def get_stats_api(user: dict = Depends(get_current_user)) -> dict:
     """API REST para telemetria de GPU."""
     return get_gpu_stats()
 
 
 @app.get("/api/ha/devices")
-async def get_ha_devices() -> list[dict]:
+async def get_ha_devices(user: dict = Depends(get_current_user)) -> list[dict]:
     """Retorna os dispositivos integrados do Home Assistant."""
     if ha_client and ha_client.entities:
         return ha_client.entities
@@ -209,7 +328,7 @@ async def get_ha_devices() -> list[dict]:
 
 
 @app.post("/api/ha/control")
-async def post_ha_control(data: dict) -> dict:
+async def post_ha_control(data: dict, user: dict = Depends(get_current_user)) -> dict:
     """Executa ações rápidas de automação do Home Assistant."""
     if not ha_client:
         raise HTTPException(status_code=503, detail="Home Assistant não configurado.")
@@ -237,6 +356,17 @@ async def post_ha_control(data: dict) -> dict:
 @app.websocket("/ws/chat")
 async def ws_chat_endpoint(websocket: WebSocket) -> None:
     """Gerencia conexões WebSocket de chat e atualizações de telemetria."""
+    token = websocket.query_params.get("token")
+    try:
+        verify_firebase_token(token)
+    except Exception as http_err:
+        await websocket.accept()
+        detail = getattr(http_err, "detail", "Não autorizado")
+        await websocket.send_json({"type": "error", "message": detail})
+        await websocket.close(code=4003)
+        logger.warning(f"WS Chat: Conexão recusada. Motivo: {detail}")
+        return
+
     await websocket.accept()
     active_chat_connections.append(websocket)
     logger.info("WS Chat: Cliente conectado.")
@@ -351,6 +481,17 @@ async def ws_chat_endpoint(websocket: WebSocket) -> None:
 async def ws_audio_endpoint(websocket: WebSocket) -> None:
     """Canal de baixa latência para streaming de áudio bidirecional."""
     global llm_generating, llm_task, tts_last_active_time, llm_interrupted_by_voice, browser_tts_end_time, browser_recent_texts
+    token = websocket.query_params.get("token")
+    try:
+        verify_firebase_token(token)
+    except Exception as http_err:
+        await websocket.accept()
+        detail = getattr(http_err, "detail", "Não autorizado")
+        await websocket.send_json({"type": "error", "message": detail})
+        await websocket.close(code=4003)
+        logger.warning(f"WS Audio: Conexão de áudio recusada. Motivo: {detail}")
+        return
+
     await websocket.accept()
     logger.info("WS Audio: Conexão de áudio estabelecida.")
 

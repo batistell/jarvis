@@ -206,6 +206,16 @@ class CloudflareSettings(BaseSettings):
     domain: str = ""
 
 
+class FirebaseSettings(BaseSettings):
+    """Configurações de autenticação do Firebase."""
+
+    model_config = SettingsConfigDict(env_prefix="JARVIS_FIREBASE_")
+
+    credentials_path: str = ""
+    project_id: str = "jarvis-1006b"
+    allowed_emails: str = ""
+
+
 class Settings(BaseSettings):
     """Configurações raízes do Jarvis.
 
@@ -235,6 +245,7 @@ class Settings(BaseSettings):
     tts: TTSSettings = Field(default_factory=TTSSettings)
     ha: HomeAssistantSettings = Field(default_factory=HomeAssistantSettings)
     cloudflare: CloudflareSettings = Field(default_factory=CloudflareSettings)
+    firebase: FirebaseSettings = Field(default_factory=FirebaseSettings)
 
     @property
     def project_root(self) -> Path:
